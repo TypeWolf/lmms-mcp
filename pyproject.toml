@@ -1,0 +1,49 @@
+[project]
+name = "lmms-mcp"
+version = "0.1.0"
+description = "MCP Server for LMMS - AI-powered music production with LMMS"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "TypeWolf" },
+]
+keywords = ["mcp", "lmms", "music", "daw", "ai", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+]
+dependencies = [
+    "mcp>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/TypeWolf/lmms-mcp"
+Repository = "https://github.com/TypeWolf/lmms-mcp"
+Issues = "https://github.com/TypeWolf/lmms-mcp/issues"
+
+[project.scripts]
+lmms-mcp = "lmms_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lmms_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
