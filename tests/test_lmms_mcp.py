@@ -189,6 +189,20 @@ class TestEffects:
         assert result["effect"] == "delay"
         assert result["chain_size"] == 1
 
+    def test_track_fxchain_lives_in_instrumenttrack(self):
+        """Regression: effects must go into <instrumenttrack>/<fxchain>,
+        not directly under <track> - LMMS ignores the latter."""
+        from lmms_mcp import server as srv
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        srv.set_project(proj)
+        srv.add_instrument_track("G", instrument="tripleoscillator")
+        srv.add_effect("track", 0, "delay")
+        track = find_tracks(proj.root)[0]
+        assert track.find("instrumenttrack/fxchain/effect") is not None
+        assert track.find("fxchain") is None
+
     def test_add_duplicate_effect_raises(self):
         from lmms_mcp.effects import add_effect
         root = self._make_project()

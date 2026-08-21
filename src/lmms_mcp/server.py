@@ -713,7 +713,13 @@ def _resolve_fxchain_target(target_type: str, target_index: int) -> ET.Element:
     proj = get_project()
     root = proj.root
     if target_type == "track":
-        return xml_parser.find_track_element(root, target_index)
+        track = xml_parser.find_track_element(root, target_index)
+        inst_track = track.find("instrumenttrack")
+        if inst_track is None:
+            raise ValueError(
+                f"Track {target_index} is not an instrument track"
+            )
+        return inst_track
     if target_type == "mixer":
         song = root.find("song")
         mixer = song.find("mixer")
