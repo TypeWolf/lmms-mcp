@@ -81,11 +81,18 @@ class LMMSProject:
         self._path = str(path)
         self._modified = False
 
-    def save(self, path: str | Path | None = None, compressed: bool = True) -> str:
-        """Save the project. Returns the path it was saved to."""
+    def save(self, path: str | Path | None = None, compressed: bool | None = None) -> str:
+        """Save the project. Returns the path it was saved to.
+
+        If compressed is None, the format follows the file extension:
+        ".mmp" is plain XML, anything else compressed (.mmpz).
+        """
         save_path = path or self._path
         if not save_path:
             raise ValueError("No path specified and no previous path to save to.")
+
+        if compressed is None:
+            compressed = not str(save_path).lower().endswith(".mmp")
 
         save_project(save_path, self._root, compressed=compressed)
         self._path = str(save_path)
@@ -341,9 +348,15 @@ class LMMSProject:
         length: int = 48,
         volume: int = 100,
         panning: int = 0,
+        pattern_index: int | None = None,
     ) -> dict:
-        """Add a note to a track's pattern."""
-        add_note_to_track(
+        """Add a note to a track's pattern.
+
+        pos is relative to the pattern start. If the note ends beyond
+        the pattern clip length, the clip is extended automatically
+        (LMMS does not play notes outside the clip window).
+        """
+        res = add_note_to_track(
             self.root,
             track_index=track_index,
             key=key,
@@ -351,11 +364,19 @@ class LMMSProject:
             length=length,
             volume=volume,
             panning=panning,
+            pattern_index=pattern_index,
         )
         self._modified = True
-        return {
-            "message": f"Added note at track {track_index}: key={key} pos={pos} len={length}",
-        }
+        message = (
+            f"Added note at track {track_index}: key={key} pos={pos} len={length}"
+        )
+        if res["extended_len"]:
+            message += (
+                f" [pattern '{res['pattern_name']}' len extended "
+                f"{res['old_len']} -> {res['new_len']}: notes beyond a "
+                f"pattern clip's end are silent in LMMS]"
+            )
+        return {"message": message}
 
     def add_mixer_channel(self, name: str, volume: float = 1.0) -> dict:
         """Add a mixer channel."""

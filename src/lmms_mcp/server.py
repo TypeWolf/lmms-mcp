@@ -183,14 +183,17 @@ def load_project(path: str) -> str:
 @mcp.tool()
 def save_project(
     path: str = "",
-    compressed: bool = True,
+    compressed: bool | None = None,
 ) -> str:
     """Save the current LMMS project to a file.
 
     Args:
         path: File path to save to. If empty, saves to the default projects directory.
             If only a filename is given (e.g. "song.mmpz"), it's saved in the default directory.
-        compressed: If True, saves as .mmpz (compressed). If False, saves as .mmp (XML).
+        compressed: If True, saves as .mmpz (compressed). If False, saves as .mmp
+            (plain XML). By default (None) the format follows the file extension:
+            ".mmp" is always plain XML, everything else compressed. Writing
+            compressed data into a .mmp breaks LMMS and other tools.
     """
     proj = get_project()
 
@@ -204,6 +207,14 @@ def save_project(
         save_path = str(projects_dir / path)
     else:
         save_path = path if path else None
+
+    if compressed is None:
+        # Follow the extension: plain XML for .mmp, compressed otherwise.
+        # (LMMSProject.save does the same inference; resolve it here so
+        # the response reports the actual format.)
+        compressed = not (
+            save_path and str(save_path).lower().endswith(".mmp")
+        ) if save_path else True
 
     result_path = proj.save(save_path, compressed=compressed) if save_path else proj.save(compressed=compressed)
 
@@ -380,6 +391,10 @@ def add_automation_track(name: str = "Automation track") -> str:
 def add_pattern_track(name: str = "Pattern 0") -> str:
     """Add a beat/bassline pattern track for drum sequencing.
 
+    A default inner kick instrument is created so notes can be added
+    immediately via add_note. Trigger it in the song editor with
+    place_bb_clip.
+
     Args:
         name: Pattern track name
     """
@@ -545,16 +560,24 @@ def add_note(
     length: int = 48,
     volume: int = 100,
     panning: int = 0,
+    pattern_index: int | None = None,
 ) -> str:
     """Add a note to a track's pattern.
 
     Args:
         track_index: Zero-based track index (must be an instrument or pattern track)
         key: MIDI note number (0-127). 60=C4 (middle C), 69=A4
-        pos: Position in ticks within the pattern (192 ticks = 1 bar)
+        pos: Position in ticks RELATIVE TO THE PATTERN START
+            (192 ticks = 1 bar). Notes are placed inside the target
+            pattern; if a note ends beyond the pattern clip length, the
+            clip is extended automatically (notes beyond the clip end
+            would otherwise be silent).
         length: Note length in ticks (48 = 1/16 note, 96 = 1/8 note, 192 = 1 bar)
         volume: Note velocity (0-200, 100=normal)
         panning: Note panning (-100 to +100)
+        pattern_index: Which pattern on the track to edit (default: first).
+            Use place_pattern to create additional patterns at specific
+            song positions first.
     """
     proj = get_project()
     result = proj.add_note(
@@ -564,6 +587,7 @@ def add_note(
         length=length,
         volume=volume,
         panning=panning,
+        pattern_index=pattern_index,
     )
     return json.dumps(result)
 
@@ -632,6 +656,7 @@ def add_notes_batch(
             length=note_data.get("length", 48),
             volume=note_data.get("volume", 100),
             panning=note_data.get("panning", 0),
+            pattern_index=note_data.get("pattern_index"),
         )
         added.append(result)
 
@@ -646,6 +671,10 @@ def add_notes_batch(
 @mcp.tool()
 def add_mixer_channel(name: str, volume: float = 1.0) -> str:
     """Add a new mixer channel.
+
+    The channel is automatically routed to Master via an explicit
+    <send> element - LMMS drops the implicit connection when loading,
+    so channels without it would be silent.
 
     Args:
         name: Channel name (e.g. "Drums", "Bass", "Lead")
@@ -1042,8 +1071,10 @@ def render_project(
     if output_path is None:
         output_path = str(proj_path.with_suffix(f".{fmt}"))
 
-    # Save current state before rendering
-    proj.save(proj.path)
+    # Save current state before rendering. Keep the compression format
+    # consistent with the file extension - compressed bytes inside a
+    # .mmp file cannot be read by LMMS and other tools.
+    proj.save(proj.path, compressed=str(proj_path).lower().endswith(".mmpz"))
 
     import subprocess
     cmd = [

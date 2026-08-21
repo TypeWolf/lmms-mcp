@@ -22,6 +22,18 @@ def _q_uncompress(data: bytes) -> bytes:
     return decompressed
 
 
+def _to_int(value, default: int = 0) -> int:
+    """Parse an integer attribute value robustly.
+
+    Tolerates float strings like "3072.0" (which Qt's toInt() rejects,
+    silently falling back to defaults and breaking clips).
+    """
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def load_project(path: str | Path) -> ET.Element:
     """Load an LMMS project file (.mmpz or .mmp) and return the root element.
 
@@ -225,19 +237,16 @@ def track_type_name(type_id: int) -> str:
     return TRACK_TYPE_NAMES.get(type_id, f"Unknown({type_id})")
 
 
-def add_instrument_track(
-    root: ET.Element,
+def _make_instrument_track(
+    parent: ET.Element,
     name: str,
     instrument: str = "tripleoscillator",
     mixer_channel: int = 0,
     volume: int = 100,
     panning: int = 0,
 ) -> ET.Element:
-    """Add an instrument track to the project and return the track element."""
-    song = root.find("song")
-    container = song.find("trackcontainer[@type='song']")
-
-    track = ET.SubElement(container, "track", {
+    """Append an instrument <track> element to a trackcontainer parent."""
+    track = ET.SubElement(parent, "track", {
         "muted": "0",
         "type": "0",
         "name": name,
@@ -298,6 +307,22 @@ def add_instrument_track(
     return track
 
 
+def add_instrument_track(
+    root: ET.Element,
+    name: str,
+    instrument: str = "tripleoscillator",
+    mixer_channel: int = 0,
+    volume: int = 100,
+    panning: int = 0,
+) -> ET.Element:
+    """Add an instrument track to the project and return the track element."""
+    song = root.find("song")
+    container = song.find("trackcontainer[@type='song']")
+    return _make_instrument_track(
+        container, name, instrument, mixer_channel, volume, panning
+    )
+
+
 def add_sample_track(
     root: ET.Element,
     name: str,
@@ -345,7 +370,11 @@ def add_automation_track(root: ET.Element, name: str = "Automation track") -> ET
 
 
 def add_pattern_track(root: ET.Element, name: str = "Pattern 0") -> ET.Element:
-    """Add a beat/bassline pattern track to the project."""
+    """Add a beat/bassline pattern track to the project.
+
+    Creates one default inner instrument track (kicker) so notes can be
+    added right away via add_note_to_track.
+    """
     song = root.find("song")
     container = song.find("trackcontainer[@type='song']")
 
@@ -362,8 +391,22 @@ def add_pattern_track(root: ET.Element, name: str = "Pattern 0") -> ET.Element:
         "height": "400", "visible": "0", "type": "bbtrackcontainer",
         "minimized": "0",
     })
+    _make_instrument_track(bb_container, name, instrument="kicker")
 
     return track
+
+
+def _select_pattern(track: ET.Element, pattern_index: int | None) -> ET.Element | None:
+    """Pick a pattern element from a track (by index, else the first)."""
+    patterns = track.findall("pattern")
+    if pattern_index is not None:
+        if not 0 <= pattern_index < len(patterns):
+            raise IndexError(
+                f"Pattern index {pattern_index} out of range "
+                f"(track has {len(patterns)} patterns)"
+            )
+        return patterns[pattern_index]
+    return patterns[0] if patterns else None
 
 
 def add_note_to_track(
@@ -375,10 +418,17 @@ def add_note_to_track(
     volume: int = 100,
     panning: int = 0,
     pattern_name: str | None = None,
-) -> ET.Element:
-    """Add a note to a pattern on an instrument track.
+    pattern_index: int | None = None,
+) -> dict:
+    """Add a note to a pattern on an instrument or pattern (BB) track.
 
-    Creates the pattern if it doesn't exist.
+    Creates the pattern if it doesn't exist. Note `pos` is relative to
+    the pattern start. If the note ends beyond the pattern clip's length,
+    the clip is automatically extended - LMMS does NOT play notes outside
+    the clip window, so without this the notes would be silent.
+
+    Returns a dict with the note element and whether the pattern length
+    was extended.
     """
     tracks = find_tracks(root)
     if track_index >= len(tracks):
@@ -388,7 +438,7 @@ def add_note_to_track(
     track_type = get_track_type(track)
 
     if track_type == 0:
-        pattern = track.find("pattern")
+        pattern = _select_pattern(track, pattern_index)
         if pattern is None:
             pname = pattern_name or track.get("name", "Pattern")
             pattern = ET.SubElement(track, "pattern", {
@@ -405,7 +455,7 @@ def add_note_to_track(
         inner_tracks = container.findall("track")
         if not inner_tracks:
             raise ValueError("Pattern track has no inner instruments")
-        pattern = inner_tracks[0].find("pattern")
+        pattern = _select_pattern(inner_tracks[0], pattern_index)
         if pattern is None:
             pname = pattern_name or "Pattern"
             pattern = ET.SubElement(inner_tracks[0], "pattern", {
@@ -423,7 +473,23 @@ def add_note_to_track(
         "pan": str(panning),
     })
 
-    return note
+    # Extend the clip so the note actually falls inside its window.
+    old_len = _to_int(pattern.get("len", "192"), 192)
+    extended = False
+    new_len = old_len
+    note_end = pos + length
+    if note_end > old_len:
+        new_len = note_end
+        pattern.set("len", str(new_len))
+        extended = True
+
+    return {
+        "note": note,
+        "pattern_name": pattern.get("name", ""),
+        "extended_len": extended,
+        "old_len": old_len,
+        "new_len": new_len,
+    }
 
 
 def add_bb_clip(
@@ -442,11 +508,11 @@ def add_bb_clip(
         raise ValueError("Can only add BB clips to pattern tracks (type=1)")
 
     clip = ET.SubElement(track, "bbtco", {
-        "len": str(length),
+        "len": str(int(length)),
         "muted": "0",
         "name": "",
         "usestyle": "1",
-        "pos": str(position),
+        "pos": str(int(position)),
         "color": "4282417407",
     })
 
@@ -475,6 +541,11 @@ def add_mixer_channel(
         "soloed": "0",
     })
     ET.SubElement(channel, "fxchain", {"numofeffects": "0", "enabled": "0"})
+    # Route the channel to Master. LMMS DELETES the implicit send to
+    # master when it allocates channels during load
+    # (Mixer::allocateChannelsTo) and only re-creates it if a <send>
+    # element exists - without this, every sub-channel renders silent.
+    ET.SubElement(channel, "send", {"channel": "0", "amount": "1"})
 
     return channel
 
@@ -519,8 +590,8 @@ def add_sample_clip(
         )
 
     clip = ET.SubElement(track, "sampleclip", {
-        "pos": str(position),
-        "len": str(length),
+        "pos": str(int(position)),
+        "len": str(int(length)),
         "src": src,
         "muted": "0",
         "off": "0",
@@ -559,8 +630,8 @@ def place_instrument_pattern(
 
     pname = name or f"{track.get('name', 'Pattern')}"
     pattern = ET.SubElement(track, "pattern", {
-        "pos": str(position),
-        "len": str(length),
+        "pos": str(int(position)),
+        "len": str(int(length)),
         "name": pname,
         "muted": "0",
         "steps": "16",
@@ -586,8 +657,8 @@ def get_arrangement(root: ET.Element) -> list[dict]:
                 clips.append({
                     "track_index": idx, "track": tname, "kind": "pattern",
                     "name": pat.get("name", ""),
-                    "pos": int(pat.get("pos", "0")),
-                    "len": int(pat.get("len", "192")),
+                    "pos": _to_int(pat.get("pos", "0")),
+                    "len": _to_int(pat.get("len", "192")),
                     "notes": len(notes),
                     "muted": pat.get("muted", "0") == "1",
                 })
@@ -596,8 +667,8 @@ def get_arrangement(root: ET.Element) -> list[dict]:
                 clips.append({
                     "track_index": idx, "track": tname, "kind": "bbtco",
                     "name": bbtco.get("name", ""),
-                    "pos": int(bbtco.get("pos", "0")),
-                    "len": int(bbtco.get("len", "192")),
+                    "pos": _to_int(bbtco.get("pos", "0")),
+                    "len": _to_int(bbtco.get("len", "192")),
                     "notes": None,
                     "muted": bbtco.get("muted", "0") == "1",
                 })
@@ -606,8 +677,8 @@ def get_arrangement(root: ET.Element) -> list[dict]:
                 clips.append({
                     "track_index": idx, "track": tname, "kind": "sampleclip",
                     "name": Path(sc.get("src", "")).stem,
-                    "pos": int(sc.get("pos", "0")),
-                    "len": int(sc.get("len", "192")),
+                    "pos": _to_int(sc.get("pos", "0")),
+                    "len": _to_int(sc.get("len", "192")),
                     "notes": None,
                     "muted": sc.get("muted", "0") == "1",
                     "src": sc.get("src", ""),
@@ -617,8 +688,8 @@ def get_arrangement(root: ET.Element) -> list[dict]:
                 clips.append({
                     "track_index": idx, "track": tname, "kind": "automation",
                     "name": ap.get("name", ""),
-                    "pos": int(ap.get("pos", "0")),
-                    "len": int(ap.get("len", "192")),
+                    "pos": _to_int(ap.get("pos", "0")),
+                    "len": _to_int(ap.get("len", "192")),
                     "notes": None,
                     "points": len(ap.findall("time")),
                     "muted": ap.get("mute", "0") == "1",
@@ -641,9 +712,11 @@ def move_clip(
     track = tracks[track_index]
 
     tags = ["pattern", "bbtco", "sampleclip"]
+    old_position = _to_int(old_position, -1)
+    new_position = _to_int(new_position, 0)
     for tag in tags:
         for clip in track.findall(tag):
-            if int(clip.get("pos", "-1")) == old_position:
+            if _to_int(clip.get("pos", "-1"), -1) == old_position:
                 clip.set("pos", str(new_position))
                 return {
                     "track_index": track_index,
@@ -665,9 +738,10 @@ def delete_clip(root: ET.Element, track_index: int, position: int) -> dict:
         raise IndexError(f"Track index {track_index} out of range")
     track = tracks[track_index]
 
+    position = _to_int(position, -1)
     for tag in ["pattern", "bbtco", "sampleclip"]:
         for clip in track.findall(tag):
-            if int(clip.get("pos", "-1")) == position:
+            if _to_int(clip.get("pos", "-1"), -1) == position:
                 track.remove(clip)
                 return {
                     "removed": tag,

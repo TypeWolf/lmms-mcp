@@ -191,9 +191,13 @@ def note_name_to_midi(name: str) -> int:
     return (octave + 1) * 12 + note_index
 
 
-def bars_to_ticks(bars: int, ticks_per_bar: int = TICKS_PER_BAR) -> int:
-    """Convert bars to ticks."""
-    return bars * ticks_per_bar
+def bars_to_ticks(bars: float, ticks_per_bar: int = TICKS_PER_BAR) -> int:
+    """Convert bars to ticks.
+
+    Accepts floats (e.g. 16.0) and always returns an int - LMMS rejects
+    float strings like "3072.0" in integer attributes.
+    """
+    return int(round(bars * ticks_per_bar))
 
 
 def ticks_to_bars(ticks: int, ticks_per_bar: int = TICKS_PER_BAR) -> float:

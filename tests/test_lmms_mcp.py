@@ -673,6 +673,109 @@ class TestCustomPluginsAndVst:
         assert "error" in response
 
 
+class TestSilenceRegressions:
+    """Regressions for bugs that rendered whole songs silent."""
+
+    def test_mixer_channel_gets_send_to_master(self):
+        """LMMS deletes the implicit send-to-master when allocating
+        channels on load (Mixer::allocateChannelsTo) - without an
+        explicit <send> element every sub-channel renders silent."""
+        from lmms_mcp.xml_parser import add_mixer_channel
+        root = create_empty_project()
+        ch = add_mixer_channel(root, "Drums")
+        send = ch.find("send")
+        assert send is not None
+        assert send.get("channel") == "0"
+        assert float(send.get("amount")) > 0
+
+    def test_note_beyond_pattern_len_extends_clip(self):
+        """LMMS does not play notes outside a pattern clip's window;
+        add_note must extend the clip instead of leaving notes silent."""
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        res = add_note_to_track(root, 0, key=57, pos=768, length=96)
+        pattern = find_tracks(root)[0].find("pattern")
+        assert pattern.get("len") == "864"
+        assert res["extended_len"] is True
+
+    def test_note_within_len_not_extended(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        res = add_note_to_track(root, 0, key=57, pos=48, length=48)
+        pattern = find_tracks(root)[0].find("pattern")
+        assert pattern.get("len") == "192"
+        assert res["extended_len"] is False
+
+    def test_bars_to_ticks_returns_int_for_float_input(self):
+        """place_pattern(pos_bars=16.0) used to write len="3072.0",
+        which LMMS cannot parse (Qt toInt fails -> clip collapses)."""
+        assert bars_to_ticks(16.0) == 3072
+        assert isinstance(bars_to_ticks(2.5), int)
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        from lmms_mcp.xml_parser import place_instrument_pattern
+        pat = place_instrument_pattern(root, 0, position=bars_to_ticks(8.0),
+                                       length=bars_to_ticks(16.0))
+        assert pat.get("pos") == "1536"
+        assert pat.get("len") == "3072"
+
+    def test_move_and_delete_clip_tolerate_float_strings(self):
+        from lmms_mcp.xml_parser import (
+            place_instrument_pattern, move_clip, delete_clip,
+        )
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        pat = place_instrument_pattern(root, 0, 192)
+        pat.set("pos", "192.0")  # legacy broken file content
+        result = move_clip(root, 0, 192, 960)
+        assert result["new_pos"] == 960
+        result = delete_clip(root, 0, 960)
+        assert "Deleted" in result["message"]
+
+    def test_pattern_track_has_inner_instrument(self):
+        """add_note on a BB track failed with 'no inner instruments' -
+        the documented workflow must work out of the box."""
+        root = create_empty_project()
+        add_pattern_track(root, "Drums")
+        bb = find_tracks(root)[0].find("bbtrack")
+        inner = bb.findall("trackcontainer/track")
+        assert len(inner) == 1
+        assert inner[0].get("type") == "0"
+        res = add_note_to_track(root, 0, key=36, pos=0, length=48)
+        assert res["note"] is not None
+
+    def test_add_note_target_specific_pattern(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        from lmms_mcp.xml_parser import place_instrument_pattern
+        place_instrument_pattern(root, 0, position=384, name="Bar3")
+        place_instrument_pattern(root, 0, position=768, name="Bar5")
+        add_note_to_track(root, 0, key=60, pos=48, length=48,
+                          pattern_index=1)
+        pats = find_tracks(root)[0].findall("pattern")
+        assert len(pats) == 2
+        assert len(pats[0].findall("note")) == 0
+        assert pats[1].get("name") == "Bar5"
+        assert len(pats[1].findall("note")) == 1
+
+    def test_save_project_infers_format_from_extension(self):
+        """Compressed qCompress bytes inside .mmp are unreadable for
+        LMMS/tooling - saving must follow the file extension."""
+        import tempfile
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        proj.add_track("instrument", "T")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mmp = str(Path(tmp) / "song.mmp")
+            mmpz = str(Path(tmp) / "song.mmpz")
+            proj.save(mmp)          # default: follow extension
+            proj.save(mmpz)
+            assert Path(mmp).read_bytes().startswith(b"<?xml")
+            assert not Path(mmpz).read_bytes().startswith(b"<?xml")
+
+
 if __name__ == "__main__":
     import sys
     print("Run with: pytest tests/")
