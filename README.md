@@ -168,6 +168,18 @@ python -m lmms_mcp
 |------|-------------|
 | `add_automation` | Create automation curves for tempo, master volume/pitch, track volume/panning and mixer channel volume |
 
+### LMMS App Integration
+
+| Tool | Description |
+|------|-------------|
+| `get_lmms_info` | Detect installed LMMS version + available plugins |
+| `render_project` | Export to WAV/FLAC/OGG/MP3 via headless LMMS render |
+
+The server reads and writes project files directly - it never launches
+the LMMS GUI. The installed LMMS is only used for: preset discovery,
+plugin availability checks (warns about plugins your version lacks,
+e.g. SlicerT/Xpressive require LMMS 1.3+) and audio rendering.
+
 ### Utilities
 
 | Tool | Description |
@@ -265,6 +277,7 @@ Typical chains:
 |----------|---------|-------------|
 | `LMMS_PROJECTS_DIR` | `~/Desktop/Media/lmms/AI-Projects` | Default directory for saving projects |
 | `LMMS_PRESETS_DIR` | auto-detected | Path to ZynAddSubFX presets folder (`data/presets/ZynAddSubFX`) |
+| `LMMS_EXECUTABLE` | auto-detected | Path to `lmms.exe` (for version/plugin checks and rendering) |
 
 ## Configuration
 

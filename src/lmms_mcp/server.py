@@ -12,6 +12,7 @@ from xml.etree import ElementTree as ET
 from mcp.server import MCPServer
 
 from . import effects as effects_mod
+from . import lmms_app
 from . import presets as zyn_presets
 from . import xml_parser
 from .models import (
@@ -290,6 +291,16 @@ def add_instrument_track(
             })
         normalized = resolved
 
+    # Check the installed LMMS actually ships this plugin
+    available, reason = lmms_app.check_plugin_available(normalized)
+    warning = None
+    if not available:
+        warning = reason
+        alt_map = {"slicert": "audiofileprocessor", "xpressive": "watsyn"}
+        alternative = alt_map.get(normalized)
+        if alternative:
+            warning += f" Consider '{alternative}' instead."
+
     result = proj.add_track(
         "instrument", name,
         instrument=normalized,
@@ -297,6 +308,8 @@ def add_instrument_track(
         volume=volume,
         panning=panning,
     )
+    if warning:
+        result["warning"] = warning
     return json.dumps(result)
 
 
@@ -714,6 +727,18 @@ def add_effect(
     try:
         parent = _resolve_fxchain_target(target_type, target_index)
         result = effects_mod.add_effect(parent, effect, wet, enabled, position)
+        available, reason = lmms_app.check_plugin_available(effect)
+        if not available:
+            alt_map = {
+                "compressor": "dynamicsprocessor",
+                "dispersion": "flanger",
+                "frequencyshifter": "eq",
+                "slewdistortion": "waveshaper",
+            }
+            alternative = alt_map.get(effect.lower())
+            if alternative:
+                reason += f" Consider '{alternative}' instead."
+            result["warning"] = reason
         return json.dumps(result)
     except ValueError as exc:
         return json.dumps({
@@ -892,6 +917,124 @@ def set_zyn_params(
         return json.dumps(result)
     except ValueError as exc:
         return json.dumps({"error": str(exc)})
+
+
+# ──────────────────────────────────────────────────────────────────
+# LMMS APP INTEGRATION (VERSION CHECK + RENDER/EXPORT)
+# ──────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_lmms_info() -> str:
+    """Get info about the installed LMMS application.
+
+    Shows the detected LMMS version, installation path and which
+    instrument/effect plugins are actually available. Use this to check
+    whether a plugin is supported before using it.
+    """
+    exe = lmms_app.find_lmms_exe()
+    if exe is None:
+        return json.dumps({
+            "found": False,
+            "message": "LMMS installation not found. Projects can still "
+                       "be created and saved, but plugin availability "
+                       "cannot be verified and rendering is disabled. "
+                       "Set LMMS_EXECUTABLE env var to your lmms.exe.",
+        })
+    installed = sorted(lmms_app.get_installed_plugins())
+    # Intersect with our known instruments/effects for quick reference
+    inst_available = [
+        i for i in KNOWN_INSTRUMENTS
+        if lmms_app.check_plugin_available(i)[0]
+    ]
+    eff_available = [
+        e for e in effects_mod.KNOWN_EFFECTS
+        if lmms_app.check_plugin_available(e)[0]
+    ]
+    return json.dumps({
+        "found": True,
+        "version": lmms_app.get_lmms_version(),
+        "path": str(exe),
+        "plugin_count": len(installed),
+        "instruments_verified_available": inst_available,
+        "effects_verified_available": eff_available,
+        "all_installed_plugins": installed,
+    }, indent=2)
+
+
+@mcp.tool()
+def render_project(
+    output_path: str | None = None,
+    file_format: str = "wav",
+    samplerate: int = 44100,
+    bitrate: int = 160,
+) -> str:
+    """Export the current project to an audio file using the installed LMMS.
+
+    This launches LMMS in headless render mode (no GUI). Requires a
+    working LMMS installation. The project is saved first, then rendered.
+
+    Args:
+        output_path: Output file path (default: <project>.wav in the
+            same directory)
+        file_format: "wav", "flac", "ogg" or "mp3"
+        samplerate: Sample rate in Hz (44100, 48000, ...)
+        bitrate: Bitrate in kbit/s for lossy formats (ogg/mp3)
+    """
+    proj = get_project()
+    if not proj.path:
+        return json.dumps({
+            "error": "Project has never been saved. Call save_project first."
+        })
+    exe = lmms_app.find_lmms_exe()
+    if exe is None:
+        return json.dumps({
+            "error": "LMMS executable not found. Set LMMS_EXECUTABLE env var.",
+        })
+
+    fmt = file_format.lower()
+    if fmt not in ("wav", "flac", "ogg", "mp3"):
+        return json.dumps({
+            "error": f"Invalid format '{file_format}'. Use wav/flac/ogg/mp3."
+        })
+
+    proj_path = Path(proj.path)
+    if output_path is None:
+        output_path = str(proj_path.with_suffix(f".{fmt}"))
+
+    # Save current state before rendering
+    proj.save(proj.path)
+
+    import subprocess
+    cmd = [
+        str(exe), "render", str(proj_path),
+        "-o", output_path, "-f", fmt,
+        "-s", str(samplerate), "-b", str(bitrate),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "error": "Rendering timed out after 300s. The song may be too long."
+        })
+
+    out_file = Path(output_path)
+    success = proc.returncode == 0 and out_file.is_file()
+    result = {
+        "command": " ".join(cmd),
+        "returncode": proc.returncode,
+        "output_file": str(out_file),
+        "success": success,
+    }
+    if success:
+        result["message"] = f"Rendered to {out_file} ({out_file.stat().st_size} bytes)"
+        result["size_bytes"] = out_file.stat().st_size
+    else:
+        result["error"] = f"Render failed: {proc.stderr.strip() or proc.stdout.strip()}"
+    return json.dumps(result)
 
 
 # ──────────────────────────────────────────────────────────────────

@@ -519,6 +519,37 @@ class TestAutomation:
         Path(path).unlink()
 
 
+class TestLmmsApp:
+    """Tests for installed-LMMS detection."""
+
+    def test_find_exe(self):
+        from lmms_mcp import lmms_app
+        exe = lmms_app.find_lmms_exe()
+        # On the dev machine LMMS is installed; skip elsewhere
+        if exe is None:
+            pytest.skip("LMMS not installed")
+        assert exe.is_file()
+
+    def test_check_plugin_known_builtin(self):
+        from lmms_mcp import lmms_app
+        ok, _ = lmms_app.check_plugin_available("tripleoscillator")
+        assert ok is True
+
+    def test_check_static_plugin(self):
+        from lmms_mcp import lmms_app
+        ok, reason = lmms_app.check_plugin_available("freeboy")
+        assert ok is True
+        assert "built-in" in reason
+
+    def test_check_1_3_only_plugin(self):
+        from lmms_mcp import lmms_app
+        if lmms_app.find_lmms_exe() is None:
+            pytest.skip("LMMS not installed")
+        ok, reason = lmms_app.check_plugin_available("slicert")
+        assert ok is False
+        assert "not included" in reason
+
+
 if __name__ == "__main__":
     import sys
     print("Run with: pytest tests/")
