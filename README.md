@@ -129,6 +129,23 @@ python -m lmms_mcp
 | `set_master_volume` | Set master volume (0-200) |
 | `set_master_pitch` | Set master pitch (-12 to +12 semitones) |
 
+### Effects (FX Chain)
+
+| Tool | Description |
+|------|-------------|
+| `add_effect` | Add a built-in effect to a track or mixer channel |
+| `remove_effect` | Remove an effect by name or chain position |
+| `toggle_effect` | Enable/bypass an effect without removing it |
+| `get_effect_chain` | List all effects on a track or mixer channel |
+
+### ZynAddSubFX Presets & Parameters
+
+| Tool | Description |
+|------|-------------|
+| `list_zyn_presets` | Browse ~950 factory presets (.xiz) by category |
+| `load_zyn_preset` | Load a preset into a zynaddsubfx track |
+| `set_zyn_params` | Set portamento, filter, FM gain, resonance etc. |
+
 ### Utilities
 
 | Tool | Description |
@@ -148,6 +165,7 @@ python -m lmms_mcp
 | `lmms://project/mixer` | All mixer channels |
 | `lmms://project/xml` | Raw project XML |
 | `lmms://reference/instruments` | Available LMMS instruments |
+| `lmms://reference/effects` | Available LMMS effects |
 | `lmms://reference/note_names` | MIDI note name mapping |
 | `lmms://reference/scales` | Available musical scales |
 
@@ -178,25 +196,53 @@ python -m lmms_mcp
 
 ## Available Instruments
 
+All built-in LMMS instruments (verified against LMMS source). LMMS has no
+plugin download mechanism - only these can be used:
+
 | Plugin ID | Name |
 |-----------|------|
-| `tripleoscillator` | Three-oscillator subtractive synth |
+| `tripleoscillator` | Three-oscillator subtractive synth (default) |
 | `kicker` | Kick drum synth |
 | `audiofileprocessor` | Audio file player/sampler |
-| `Organic` | Additive organ synth |
-| `Mallets` | Physical modeling mallet instrument |
-| `Genny` | FM synthesizer |
-| `LB302` | TB-303 style acid bass |
-| `Papu` | Game Boy sound chip |
-| `FreeBoy` | Game Boy sound chip emulator |
-| `Hedlines` | Analog-style pad synth |
-| `Xmp` | FastTracker 2 module player |
+| `organic` | Additive organ synth |
+| `malletsstk` | Physical modeling mallets (STK) |
+| `lb302` | TB-303 style acid bass |
+| `monstro` | Powerful 3-oscillator polyphonic synth |
+| `freeboy` | Game Boy sound chip emulator |
+| `nes` | NES 8-bit sound chip emulator |
+| `sid` | Commodore 64 SID chip emulator |
+| `sfxr` | Retro sound effect generator |
+| `opulenz` | OPL3 FM synthesizer |
+| `watsyn` | 4-oscillator wavetable-style synth |
+| `xpressive` | Expressive mono lead synth |
+| `zynaddsubfx` | ZynAddSubFX powerful feature-rich synth |
+| `sf2player` | SoundFont (.sf2) sample player |
+| `vibedstrings` | Vibrating string physical model |
+| `bitinvader` | Bit-crushed wavetable synth |
+| `patman` | GUS patch sampler |
+| `gigplayer` | GIG sample library player |
+| `slicert` | Beat slicer for audio loops |
+| `vestige` | VST plugin host (Windows only) |
+
+## Available Effects
+
+Built-in LMMS effects for `add_effect`: `amplifier`, `bassbooster`,
+`bitcrush`, `compressor`, `crossovereq`, `delay`, `dispersion`,
+`dualfilter`, `dynamicsprocessor`, `eq`, `flanger`, `frequencyshifter`,
+`multitapecho`, `reverbsc`, `slewdistortion`, `stereoenhancer`,
+`stereomatrix`, `waveshaper`.
+
+Typical chains:
+- Lead synth: `delay` -> `reverbsc`
+- Vocals: `eq` -> `compressor` -> `reverbsc`
+- Master bus: `eq` -> `compressor` -> `stereoenhancer`
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LMMS_PROJECTS_DIR` | `~/Desktop/Media/lmms/AI-Projects` | Default directory for saving projects |
+| `LMMS_PRESETS_DIR` | auto-detected | Path to ZynAddSubFX presets folder (`data/presets/ZynAddSubFX`) |
 
 ## Configuration
 

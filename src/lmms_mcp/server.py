@@ -7,9 +7,13 @@ manipulating LMMS projects programmatically via the Model Context Protocol.
 import json
 import os
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from mcp.server import MCPServer
 
+from . import effects as effects_mod
+from . import presets as zyn_presets
+from . import xml_parser
 from .models import (
     NOTE_NAMES,
     TICKS_PER_BAR,
@@ -90,11 +94,22 @@ produce, use tripleoscillator (universal synth) and explain the limitation.
 Safe choices: tripleoscillator, kicker (drums), lb302 (bass),
 freeboy/nes/sid (chiptune), organic (pads/organ).
 
+ZynAddSubFX: For rich sounds, add a track with instrument "zynaddsubfx",
+then load one of ~950 factory presets via load_zyn_preset (browse with
+list_zyn_presets). Fine-tune with set_zyn_params.
+
+Effects: Add built-in effects to tracks or mixer channels with add_effect
+(see lmms://reference/effects for the full list). Typical chains:
+- Lead: delay -> reverbsc
+- Vocals: eq -> compressor -> reverbsc
+- Master bus: eq -> compressor -> stereoenhancer
+
 Default projects directory: {DEFAULT_PROJECTS_DIR}
 When saving a project, use this directory if no specific path is given.
 Example: save to {DEFAULT_PROJECTS_DIR}/my_song.mmpz
 
-Workflow: Create a project -> Add tracks -> Add notes -> Configure mixer -> Save
+Workflow: Create a project -> Add tracks -> Load instruments/presets ->
+Add notes -> Add effects -> Configure mixer -> Save
 """,
 )
 
@@ -650,6 +665,236 @@ def set_mixer_channel_name(channel_num: int, name: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────
+# EFFECT (FXCHAIN) TOOLS
+# ──────────────────────────────────────────────────────────────────
+
+
+def _resolve_fxchain_target(target_type: str, target_index: int) -> ET.Element:
+    """Resolve a track or mixer channel element for fxchain operations."""
+    proj = get_project()
+    root = proj.root
+    if target_type == "track":
+        return xml_parser.find_track_element(root, target_index)
+    if target_type == "mixer":
+        song = root.find("song")
+        mixer = song.find("mixer")
+        channels = mixer.findall("mixerchannel")
+        if not 0 <= target_index < len(channels):
+            raise ValueError(
+                f"Mixer channel {target_index} out of range "
+                f"(0-{len(channels) - 1})"
+            )
+        return channels[target_index]
+    raise ValueError("target_type must be 'track' or 'mixer'")
+
+
+@mcp.tool()
+def add_effect(
+    target_type: str,
+    target_index: int,
+    effect: str,
+    wet: float = 1.0,
+    enabled: bool = True,
+    position: int | None = None,
+) -> str:
+    """Add an effect to a track's or mixer channel's effect chain.
+
+    Args:
+        target_type: "track" or "mixer"
+        target_index: Track index or mixer channel number (0=Master)
+        effect: Built-in LMMS effect name. Valid: amplifier, bassbooster,
+            bitcrush, compressor, crossovereq, delay, dispersion,
+            dualfilter, dynamicsprocessor, eq, flanger, frequencyshifter,
+            multitapecho, reverbsc, slewdistortion, stereoenhancer,
+            stereomatrix, waveshaper
+        wet: Wet/dry mix 0.0-1.0 (1.0=full effect)
+        enabled: Whether the effect is active
+        position: Chain position to insert at (None=end of chain)
+    """
+    try:
+        parent = _resolve_fxchain_target(target_type, target_index)
+        result = effects_mod.add_effect(parent, effect, wet, enabled, position)
+        return json.dumps(result)
+    except ValueError as exc:
+        return json.dumps({
+            "error": str(exc),
+            "valid_effects": sorted(effects_mod.KNOWN_EFFECTS.keys()),
+            "recommendations": effects_mod.EFFECT_RECOMMENDATIONS,
+        })
+
+
+@mcp.tool()
+def remove_effect(target_type: str, target_index: int, effect: str | int) -> str:
+    """Remove an effect from a chain by name or chain position.
+
+    Args:
+        target_type: "track" or "mixer"
+        target_index: Track index or mixer channel number
+        effect: Effect name (e.g. "delay") or position (e.g. 0)
+    """
+    try:
+        parent = _resolve_fxchain_target(target_type, target_index)
+        result = effects_mod.remove_effect(parent, effect)
+        return json.dumps(result)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def toggle_effect(
+    target_type: str, target_index: int, effect: str | int, enabled: bool
+) -> str:
+    """Enable or disable an effect without removing it.
+
+    Args:
+        target_type: "track" or "mixer"
+        target_index: Track index or mixer channel number
+        effect: Effect name or chain position
+        enabled: True to enable, False to bypass
+    """
+    try:
+        parent = _resolve_fxchain_target(target_type, target_index)
+        result = effects_mod.set_effect_enabled(parent, effect, enabled)
+        return json.dumps(result)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def get_effect_chain(target_type: str, target_index: int) -> str:
+    """List all effects on a track's or mixer channel's effect chain.
+
+    Args:
+        target_type: "track" or "mixer"
+        target_index: Track index or mixer channel number
+    """
+    try:
+        parent = _resolve_fxchain_target(target_type, target_index)
+        return json.dumps({
+            "target": f"{target_type}[{target_index}]",
+            "effects": effects_mod.list_effects(parent),
+        })
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+# ──────────────────────────────────────────────────────────────────
+# ZYNADDSUBFX PRESET / PARAMETER TOOLS
+# ──────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def list_zyn_presets(category: str | None = None) -> str:
+    """List available ZynAddSubFX presets (.xiz files).
+
+    Args:
+        category: Optional category filter (e.g. "Bass", "Strings",
+            "Synth", "Pads", "Brass"). Omit to list all categories' presets.
+    """
+    base = zyn_presets.get_presets_dir()
+    if base is None:
+        return json.dumps({
+            "error": "No ZynAddSubFX presets directory found.",
+            "hint": "Set the LMMS_PRESETS_DIR environment variable to your "
+                    "LMMS data/presets/ZynAddSubFX folder.",
+        })
+    try:
+        presets = zyn_presets.list_presets(category)
+    except ValueError as exc:
+        return json.dumps({
+            "error": str(exc),
+            "categories": zyn_presets.list_categories(),
+        })
+    return json.dumps({
+        "presets_dir": str(base),
+        "categories": zyn_presets.list_categories(),
+        "count": len(presets),
+        "presets": presets[:200],
+        "truncated": len(presets) > 200,
+    }, indent=2)
+
+
+@mcp.tool()
+def load_zyn_preset(track_index: int, preset: str) -> str:
+    """Load a ZynAddSubFX preset (.xiz) into a zynaddsubfx instrument track.
+
+    The track must use the 'zynaddsubfx' instrument. Presets can be
+    referenced by filename (e.g. "Bass 1"), "Category/Name", or full path.
+
+    Args:
+        track_index: Index of the target track
+        preset: Preset name, "Category/Name" or absolute path
+    """
+    proj = get_project()
+    try:
+        preset_xml = zyn_presets.load_preset_xml(preset)
+        result = xml_parser.embed_zyn_preset(proj.root, track_index, preset_xml, preset)
+        return json.dumps(result)
+    except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def set_zyn_params(
+    track_index: int,
+    portamento: int | None = None,
+    filterfreq: int | None = None,
+    filterq: int | None = None,
+    bandwidth: int | None = None,
+    fmgain: int | None = None,
+    rescenterfreq: int | None = None,
+    resbandwidth: int | None = None,
+) -> str:
+    """Set ZynAddSubFX global parameters on a zynaddsubfx track.
+
+    All values are 0-127 as in the ZynAddSubFX UI. Only provided
+    parameters are changed.
+
+    Args:
+        track_index: Index of the zynaddsubfx track
+        portamento: Portamento amount (0-127)
+        filterfreq: Filter cutoff frequency (0-127)
+        filterq: Filter resonance/Q (0-127)
+        bandwidth: Bandwidth (0-127)
+        fmgain: FM gain (0-127)
+        rescenterfreq: Resonance center frequency (0-127)
+        resbandwidth: Resonance bandwidth (0-127)
+    """
+    proj = get_project()
+    params = {}
+    for name, value in [
+        ("portamento", portamento), ("filterfreq", filterfreq),
+        ("filterq", filterq), ("bandwidth", bandwidth),
+        ("fmgain", fmgain), ("rescenterfreq", rescenterfreq),
+        ("resbandwidth", resbandwidth),
+    ]:
+        if value is not None:
+            if not 0 <= value <= 127:
+                return json.dumps({
+                    "error": f"{name} must be 0-127, got {value}"
+                })
+            params[name] = value
+    if not params:
+        return json.dumps({"error": "No parameters provided"})
+    try:
+        result = xml_parser.set_instrument_params(proj.root, track_index, params)
+        # Mark modified controllers so LMMS applies them on load
+        inst_track = xml_parser.find_track_element(proj.root, track_index) \
+            .find("instrumenttrack/instrument")
+        controllers = {
+            "portamento": 1, "filterfreq": 2, "filterq": 3,
+            "bandwidth": 4, "fmgain": 5,
+            "rescenterfreq": 6, "resbandwidth": 7,
+        }
+        modified = sorted(controllers[p] for p in params if p in controllers)
+        inst_track.set("modifiedcontrollers", ",".join(map(str, modified)))
+        result["modifiedcontrollers"] = modified
+        return json.dumps(result)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+# ──────────────────────────────────────────────────────────────────
 # TRANSPORT / SONG SETTINGS TOOLS
 # ──────────────────────────────────────────────────────────────────
 
@@ -860,6 +1105,21 @@ def resource_instruments() -> str:
             for name, desc in sorted(KNOWN_INSTRUMENTS.items())
         ],
         "recommendations_by_use_case": INSTRUMENT_RECOMMENDATIONS,
+    }, indent=2)
+
+
+@mcp.resource("lmms://reference/effects")
+def resource_effects() -> str:
+    """List of available LMMS effects (built-in, verified)."""
+    return json.dumps({
+        "note": "These are ALL built-in LMMS effects. External-host "
+                "effects (ladspaeffect, lv2effect, vsteffect) depend on "
+                "system plugins and should be avoided.",
+        "effects": [
+            {"name": name, "description": desc, "controls_node": node}
+            for name, (desc, node) in sorted(KNOWN_EFFECTS.items())
+        ],
+        "recommendations_by_use_case": EFFECT_RECOMMENDATIONS,
     }, indent=2)
 
 

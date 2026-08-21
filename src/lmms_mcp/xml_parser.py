@@ -486,3 +486,121 @@ def set_head_attribute(root: ET.Element, attr: str, value: str) -> None:
         head = root.find("head")
     if head is not None:
         head.set(attr, value)
+
+
+# ──────────────────────────────────────────────────────────────────
+# INSTRUMENT PARAMETER / PRESET SUPPORT
+# ──────────────────────────────────────────────────────────────────
+
+def find_track_element(root: ET.Element, index: int) -> ET.Element:
+    """Find a track element by its position in the song trackcontainer."""
+    song = root.find("song")
+    container = song.find("trackcontainer[@type='song']")
+    tracks = container.findall("track")
+    if not 0 <= index < len(tracks):
+        raise ValueError(
+            f"Track index {index} out of range (0-{len(tracks) - 1})"
+        )
+    return tracks[index]
+
+
+def set_instrument_params(
+    root: ET.Element,
+    track_index: int,
+    params: dict,
+) -> dict:
+    """Set parameters on the <instrument> element of an instrument track.
+
+    For zynaddsubfx these are: portamento, filterfreq, filterq, bandwidth,
+    fmgain, rescenterfreq, resbandwidth, modifiedcontrollers.
+    """
+    track = find_track_element(root, track_index)
+    inst_track = track.find("instrumenttrack")
+    if inst_track is None:
+        raise ValueError(f"Track {track_index} is not an instrument track")
+    inst = inst_track.find("instrument")
+    if inst is None:
+        raise ValueError(f"Track {track_index} has no instrument element")
+
+    applied = {}
+    for key, value in params.items():
+        inst.set(key, str(value))
+        applied[key] = value
+
+    return {
+        "track_index": track_index,
+        "instrument": inst.get("name"),
+        "applied": applied,
+    }
+
+
+def embed_zyn_preset(
+    root: ET.Element,
+    track_index: int,
+    preset_xml: str,
+    preset_name: str = "",
+) -> dict:
+    """Embed ZynAddSubFX preset XML into a zynaddsubfx instrument track.
+
+    Args:
+        root: Project root element.
+        track_index: Index of the target instrument track.
+        preset_xml: Raw XML string from a .xiz preset file.
+        preset_name: Optional display name for the result message.
+
+    Returns:
+        Dict with result info.
+
+    Raises:
+        ValueError: If track is not a zynaddsubfx instrument or the
+            preset XML is invalid.
+    """
+    track = find_track_element(root, track_index)
+    inst_track = track.find("instrumenttrack")
+    if inst_track is None:
+        raise ValueError(f"Track {track_index} is not an instrument track")
+    inst = inst_track.find("instrument")
+    if inst is None or inst.get("name") != "zynaddsubfx":
+        actual = inst.get("name") if inst is not None else "none"
+        raise ValueError(
+            f"Track {track_index} uses '{actual}', not 'zynaddsubfx'. "
+            f"Zyn presets can only be loaded on zynaddsubfx tracks."
+        )
+
+    # Validate and normalize the preset XML (strip DOCTYPE - ElementTree
+    # cannot parse it and LMMS does not need it)
+    import re as _re
+    cleaned = _re.sub(r"<!DOCTYPE[^>]*>", "", preset_xml)
+    try:
+        preset_root = ET.fromstring(cleaned)
+    except ET.ParseError as exc:
+        raise ValueError(f"Invalid preset XML: {exc}") from exc
+
+    if preset_root.tag != "ZynAddSubFX-data":
+        raise ValueError(
+            f"Preset root element is '{preset_root.tag}', expected "
+            f"'ZynAddSubFX-data'. Is this really a .xiz file?"
+        )
+
+    # Remove any existing embedded data, then append the new one
+    for old in inst.findall("ZynAddSubFX-data"):
+        inst.remove(old)
+    inst.append(preset_root)
+
+    # Extract patch name from preset INFO if available
+    patch_name = preset_name
+    try:
+        info = preset_root.find("INSTRUMENT/INFO")
+        if info is not None:
+            name_el = info.find("string[@name='name']")
+            if name_el is not None and name_el.text:
+                patch_name = name_el.text.strip()
+    except (AttributeError, TypeError):
+        pass
+
+    return {
+        "track_index": track_index,
+        "preset": patch_name or preset_name or "unknown",
+        "message": f"Loaded ZynAddSubFX preset '{patch_name}' into track "
+                   f"{track_index}",
+    }
