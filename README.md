@@ -21,7 +21,7 @@ pip install lmms-mcp
 Or from source:
 
 ```bash
-git clone https://github.com/yourusername/lmms-mcp.git
+git clone https://github.com/TypeWolf/lmms-mcp.git
 cd lmms-mcp
 pip install -e .
 ```
@@ -238,7 +238,7 @@ python -m lmms_mcp
 
 ```bash
 # Clone and install
-git clone https://github.com/yourusername/lmms-mcp.git
+git clone https://github.com/TypeWolf/lmms-mcp.git
 cd lmms-mcp
 pip install -e ".[dev]"
 
