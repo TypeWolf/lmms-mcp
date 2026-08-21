@@ -29,6 +29,44 @@ DEFAULT_PROJECTS_DIR = os.environ.get(
     str(Path.home() / "Desktop" / "Media" / "lmms" / "AI-Projects"),
 )
 
+# Real LMMS built-in instrument plugin names (as used in the XML
+# <instrument name="..."> attribute). Verified against LMMS source.
+KNOWN_INSTRUMENTS = {
+    "tripleoscillator": "Three-oscillator subtractive synth (default, always works)",
+    "kicker": "Kick drum synthesizer",
+    "audiofileprocessor": "Audio file player/sampler (WAV, OGG, etc.)",
+    "organic": "Additive organ synthesizer",
+    "malletsstk": "Physical modeling mallets (STK)",
+    "freeboy": "Game Boy sound chip emulator (chiptune)",
+    "lb302": "Roland TB-303 style acid bass synth",
+    "monstro": "Powerful 3-oscillator polyphonic synth",
+    "nes": "NES 8-bit sound chip emulator (chiptune)",
+    "opulenz": "OPL3 FM synthesizer (Yamaha DX100 style)",
+    "patman": "GUS patch sampler",
+    "sf2player": "SoundFont (.sf2) sample player",
+    "sfxr": "Retro sound effect generator (chiptune)",
+    "sid": "Commodore 64 SID chip emulator (chiptune)",
+    "slicert": "Beat slicer for chopping audio loops",
+    "vibedstrings": "Vibrating string physical model",
+    "watsyn": "4-oscillator wavetable-style synth",
+    "xpressive": "Expressive mono lead synth",
+    "zynaddsubfx": "ZynAddSubFX powerful feature-rich synth",
+    "gigplayer": "GIG sample library player",
+    "bitinvader": "Bit-crushed wavetable synth",
+    "vestige": "VST plugin host (Windows only)",
+}
+
+# Recommended instruments per use case - helps agents pick valid plugins
+INSTRUMENT_RECOMMENDATIONS = {
+    "drums": ["kicker", "audiofileprocessor", "sfxr"],
+    "bass": ["lb302", "tripleoscillator", "monstro"],
+    "lead": ["tripleoscillator", "watsyn", "xpressive", "opulenz"],
+    "pad": ["organic", "zynaddsubfx", "monstro"],
+    "chiptune": ["freeboy", "nes", "sid", "sfxr"],
+    "keys": ["malletsstk", "opulenz", "zynaddsubfx"],
+    "strings": ["vibedstrings", "zynaddsubfx"],
+}
+
 mcp = MCPServer(
     "LMMS MCP Server",
     instructions=f"""LMMS MCP Server for AI-powered music production.
@@ -44,6 +82,13 @@ Key concepts:
 - Time is measured in ticks: 192 ticks = 1 bar (4/4 time)
 - Notes use MIDI key numbers: 60=C4 (middle C), 69=A4
 - Volume: 0-200 (100=normal), Panning: -100 to +100
+
+IMPORTANT - Instruments: Only use built-in LMMS instrument names (see the
+add_instrument_track tool description or lmms://reference/instruments).
+LMMS has NO plugin download mechanism. If asked for a sound you cannot
+produce, use tripleoscillator (universal synth) and explain the limitation.
+Safe choices: tripleoscillator, kicker (drums), lb302 (bass),
+freeboy/nes/sid (chiptune), organic (pads/organ).
 
 Default projects directory: {DEFAULT_PROJECTS_DIR}
 When saving a project, use this directory if no specific path is given.
@@ -185,18 +230,54 @@ def add_instrument_track(
 
     Args:
         name: Track name (e.g. "Lead Synth", "Bass")
-        instrument: Plugin name. Options: tripleoscillator, kicker,
-            audiofileprocessor, Organic, Mallets, AudioFileProcessor,
-            FreeBoy, Hedlines, Genny, Xmp, LB302, vecx,蛋糕(cake),
-            Papu, Sicologic, TripleConnector, TabSynth, Vibrante
+        instrument: Plugin name (lowercase). Valid options:
+            tripleoscillator, kicker, audiofileprocessor, organic,
+            malletsstk, freeboy, lb302, monstro, nes, opulenz,
+            patman, sf2player, sfxr, sid, slicert, vibedstrings,
+            watsyn, xpressive, zynaddsubfx, gigplayer, bitinvader
         mixer_channel: Mixer channel number (0=Master, 1+=custom channels)
         volume: Track volume (0-200, 100=normal)
         panning: Track panning (-100 to +100, 0=center)
     """
     proj = get_project()
+
+    # Validate instrument name (case-insensitive fuzzy match)
+    normalized = instrument.strip().lower()
+    if normalized not in KNOWN_INSTRUMENTS:
+        # Try common aliases / case variants
+        alias_map = {
+            "mallets": "malletsstk",
+            "stk": "malletsstk",
+            "sf2": "sf2player",
+            "fluidsynth": "sf2player",
+            "zynaddsubfx": "zynaddsubfx",
+            "zyn": "zynaddsubfx",
+            "zynadd": "zynaddsubfx",
+            "audiofileprocessor": "audiofileprocessor",
+            "audiofile": "audiofileprocessor",
+            "afp": "audiofileprocessor",
+            "lb-302": "lb302",
+            "303": "lb302",
+            "opl3": "opulenz",
+            "opulenz": "opulenz",
+        }
+        resolved = alias_map.get(normalized)
+        if resolved is None:
+            suggestions = ", ".join(sorted(KNOWN_INSTRUMENTS.keys()))
+            return json.dumps({
+                "error": f"Unknown instrument '{instrument}'. "
+                f"LMMS has no plugin download mechanism - only built-in "
+                f"instruments can be used.",
+                "valid_instruments": sorted(KNOWN_INSTRUMENTS.keys()),
+                "hint": f"Use one of: {suggestions}. "
+                f"Recommended: tripleoscillator (universal), kicker (drums), "
+                f"lb302 (bass), freeboy/nes/sid (chiptune).",
+            })
+        normalized = resolved
+
     result = proj.add_track(
         "instrument", name,
-        instrument=instrument,
+        instrument=normalized,
         mixer_channel=mixer_channel,
         volume=volume,
         panning=panning,
@@ -770,25 +851,15 @@ def resource_project_xml() -> str:
 
 @mcp.resource("lmms://reference/instruments")
 def resource_instruments() -> str:
-    """List of available LMMS instruments/plugins."""
+    """List of available LMMS instruments/plugins (built-in, verified)."""
     return json.dumps({
+        "note": "These are ALL built-in LMMS instruments. LMMS cannot "
+                "download additional plugins - do not use any other names.",
         "instruments": [
-            {"name": "tripleoscillator", "description": "Three-oscillator subtractive synthesizer"},
-            {"name": "kicker", "description": "Kick drum synthesizer"},
-            {"name": "Organic", "description": "Additive organ synthesizer"},
-            {"name": "Mallets", "description": "Physical modeling mallet instrument"},
-            {"name": "AudioFileProcessor", "description": "Audio file player/sampler"},
-            {"name": "FreeBoy", "description": "Game Boy sound chip emulator"},
-            {"name": "Hedlines", "description": "Analog-style pad synthesizer"},
-            {"name": "Genny", "description": "FM synthesizer (Yamaha DX7 style)"},
-            {"name": "Xmp", "description": "FastTracker 2 module player"},
-            {"name": "LB302", "description": "Roland TB-303 style acid bass"},
-            {"name": "vecx", "description": "Supersaw synthesizer"},
-            {"name": "Papu", "description": "Game Boy sound chip (alternate)"},
-            {"name": "Sicologic", "description": "Analog-style mono synthesizer"},
-            {"name": "TabSynth", "description": "Karplus-Strong plucked string"},
-            {"name": "Vibrante", "description": "Vibrato-heavy FM synth"},
+            {"name": name, "description": desc}
+            for name, desc in sorted(KNOWN_INSTRUMENTS.items())
         ],
+        "recommendations_by_use_case": INSTRUMENT_RECOMMENDATIONS,
     }, indent=2)
 
 
@@ -847,7 +918,7 @@ Steps:
 1. Create a new project with {bpm} BPM
 2. Add an instrument track "Drums" with kicker or audiofileprocessor
 3. Add an instrument track "Bass" with tripleoscillator or LB302
-4. Add an instrument track "Melody" with tripleoscillator or Genny
+4. Add an instrument track "Melody" with tripleoscillator or watsyn
 5. Add an automation track for volume/parameter automation
 6. Add notes to each track following {genre} conventions
 7. Configure mixer channels
@@ -923,7 +994,7 @@ Parameters:
 
 Steps:
 1. Use the generate_scale tool to get the scale notes
-2. Create or find a melody instrument track (tripleoscillator, Genny, etc.)
+2. Create or find a melody instrument track (tripleoscillator, watsyn, etc.)
 3. Add notes following the {style} style:
    - Simple: Use mostly scale tones on strong beats
    - Complex: Use chromatic passing tones and syncopation
