@@ -180,6 +180,17 @@ the LMMS GUI. The installed LMMS is only used for: preset discovery,
 plugin availability checks (warns about plugins your version lacks,
 e.g. SlicerT/Xpressive require LMMS 1.3+) and audio rendering.
 
+### Custom Plugins & VST
+
+| Tool | Description |
+|------|-------------|
+| `list_available_plugins` | Dynamically list ALL installed plugins (incl. custom ones) |
+| `scan_vst_directory` | Find VST .dll files in a folder |
+| `add_vst_track` | Add a track hosting a VST plugin (Vestige) |
+
+Custom LMMS plugins dropped into the plugins folder are detected
+automatically and can be used directly by name - no server update needed.
+
 ### Utilities
 
 | Tool | Description |

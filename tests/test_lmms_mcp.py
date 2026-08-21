@@ -541,13 +541,122 @@ class TestLmmsApp:
         assert ok is True
         assert "built-in" in reason
 
-    def test_check_1_3_only_plugin(self):
+    def test_check_plugin_matches_dll_reality(self):
+        """check_plugin_available must agree with the actual plugins dir."""
         from lmms_mcp import lmms_app
         if lmms_app.find_lmms_exe() is None:
             pytest.skip("LMMS not installed")
-        ok, reason = lmms_app.check_plugin_available("slicert")
+        installed = lmms_app.get_installed_plugins()
+        # slicert: available iff its DLL exists (user may add/remove it)
+        ok, _ = lmms_app.check_plugin_available("slicert")
+        assert ok == ("slicert" in installed)
+
+    def test_check_unknown_plugin_reports_missing(self):
+        from lmms_mcp import lmms_app
+        if lmms_app.find_lmms_exe() is None:
+            pytest.skip("LMMS not installed")
+        ok, reason = lmms_app.check_plugin_available(
+            "definitely_not_a_real_plugin_12345"
+        )
         assert ok is False
         assert "not included" in reason
+
+    def test_classify_plugins(self):
+        from lmms_mcp import lmms_app
+        if lmms_app.find_lmms_exe() is None:
+            pytest.skip("LMMS not installed")
+        result = lmms_app.classify_installed_plugins(
+            {"tripleoscillator"}, {"delay"}
+        )
+        assert "tripleoscillator" in result["instruments"]
+        assert "delay" in result["effects"]
+        # everything else lands in unknown
+        all_names = (
+            result["instruments"] + result["effects"] + result["unknown"]
+        )
+        installed = lmms_app.get_installed_plugins()
+        for name in installed:
+            if not name.startswith("lib"):
+                assert name in all_names
+
+    def test_find_vst_plugins(self):
+        from lmms_mcp import lmms_app
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            dll = Path(tmp) / "fakevst.dll"
+            dll.write_bytes(b"MZ fake")
+            (Path(tmp) / "sub").mkdir()
+            nested = Path(tmp) / "sub" / "nested.dll"
+            nested.write_bytes(b"MZ fake")
+            results = lmms_app.find_vst_plugins(tmp)
+            assert len(results) == 2
+            shallow = lmms_app.find_vst_plugins(tmp, recursive=False)
+            assert len(shallow) == 1
+            assert shallow[0]["name"] == "fakevst"
+
+    def test_find_vst_plugins_missing_dir(self):
+        from lmms_mcp import lmms_app
+        with pytest.raises(ValueError, match="not found"):
+            lmms_app.find_vst_plugins("Z:/no/such/dir")
+
+
+class TestCustomPluginsAndVst:
+    """Tests for dynamic plugin usage and VST tracks."""
+
+    def test_custom_plugin_accepted(self):
+        """A DLL that exists in the plugins dir is accepted by name."""
+        from lmms_mcp import server as srv
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        srv.set_project(proj)
+        # papu ships as legacy DLL; if absent skip
+        from lmms_mcp import lmms_app
+        if "papu" not in lmms_app.get_installed_plugins():
+            pytest.skip("papu.dll not installed")
+        response = json.loads(
+            srv.add_instrument_track("Legacy", instrument="papu")
+        )
+        assert response.get("custom_plugin") is True
+
+    def test_unknown_plugin_rejected(self):
+        from lmms_mcp import server as srv
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        srv.set_project(proj)
+        response = json.loads(
+            srv.add_instrument_track("X", instrument="not_a_plugin_xyz")
+        )
+        assert "error" in response
+
+    def test_add_vst_track_sets_plugin_path(self):
+        from lmms_mcp import server as srv
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        srv.set_project(proj)
+        # Use any existing file as stand-in DLL (only path handling tested)
+        dll = Path(r"C:\Program Files\LMMS\plugins\tripleoscillator.dll")
+        if not dll.is_file():
+            pytest.skip("LMMS plugins folder not found")
+        response = json.loads(srv.add_vst_track("VST Test", str(dll)))
+        assert response.get("vst") == str(dll)
+        track = find_tracks(proj.root)[0]
+        vestige_el = track.find("instrumenttrack/instrument/vestige")
+        assert vestige_el is not None
+        assert vestige_el.get("plugin", "").lower().endswith(".dll")
+
+    def test_add_vst_track_missing_file(self):
+        from lmms_mcp import server as srv
+        from lmms_mcp.project import LMMSProject
+        proj = LMMSProject()
+        proj.new()
+        srv.set_project(proj)
+        response = json.loads(
+            srv.add_vst_track("VST", "Z:/nonexistent/plugin.dll")
+        )
+        assert "error" in response
 
 
 if __name__ == "__main__":

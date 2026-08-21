@@ -95,6 +95,12 @@ produce, use tripleoscillator (universal synth) and explain the limitation.
 Safe choices: tripleoscillator, kicker (drums), lb302 (bass),
 freeboy/nes/sid (chiptune), organic (pads/organ).
 
+Custom plugins: The user may have installed additional LMMS plugins or
+VSTs. Check list_available_plugins for dynamically detected custom
+plugins - they can be used directly by name in add_instrument_track /
+add_effect. For VST .dll files anywhere on disk, use scan_vst_directory
+and add_vst_track.
+
 ZynAddSubFX: For rich sounds, add a track with instrument "zynaddsubfx",
 then load one of ~950 factory presets via load_zyn_preset (browse with
 list_zyn_presets). Fine-tune with set_zyn_params.
@@ -279,6 +285,26 @@ def add_instrument_track(
         }
         resolved = alias_map.get(normalized)
         if resolved is None:
+            # Not a known name - but maybe a custom/newly installed plugin?
+            installed = lmms_app.get_installed_plugins()
+            if normalized in installed:
+                result_msg = {
+                    "message": f"Added instrument track '{name}' with "
+                               f"custom plugin '{normalized}'",
+                    "track_index": None,
+                    "custom_plugin": True,
+                    "note": f"'{normalized}' is not in the built-in list "
+                            f"but is installed in your LMMS plugins folder.",
+                }
+                proj_result = proj.add_track(
+                    "instrument", name,
+                    instrument=normalized,
+                    mixer_channel=mixer_channel,
+                    volume=volume,
+                    panning=panning,
+                )
+                proj_result["custom_plugin"] = True
+                return json.dumps(proj_result)
             suggestions = ", ".join(sorted(KNOWN_INSTRUMENTS.keys()))
             return json.dumps({
                 "error": f"Unknown instrument '{instrument}'. "
@@ -286,8 +312,8 @@ def add_instrument_track(
                 f"instruments can be used.",
                 "valid_instruments": sorted(KNOWN_INSTRUMENTS.keys()),
                 "hint": f"Use one of: {suggestions}. "
-                f"Recommended: tripleoscillator (universal), kicker (drums), "
-                f"lb302 (bass), freeboy/nes/sid (chiptune).",
+                f"For VST plugins use add_vst_track with the DLL path. "
+                f"Use list_available_plugins to see what is installed.",
             })
         normalized = resolved
 
@@ -729,16 +755,24 @@ def add_effect(
         result = effects_mod.add_effect(parent, effect, wet, enabled, position)
         available, reason = lmms_app.check_plugin_available(effect)
         if not available:
-            alt_map = {
-                "compressor": "dynamicsprocessor",
-                "dispersion": "flanger",
-                "frequencyshifter": "eq",
-                "slewdistortion": "waveshaper",
-            }
-            alternative = alt_map.get(effect.lower())
-            if alternative:
-                reason += f" Consider '{alternative}' instead."
-            result["warning"] = reason
+            # Custom effect plugin? (DLL exists but not in known list)
+            installed = lmms_app.get_installed_plugins()
+            if effect.strip().lower() in installed:
+                result["note"] = (
+                    f"'{effect}' is a custom plugin - parameters use "
+                    f"defaults."
+                )
+            else:
+                alt_map = {
+                    "compressor": "dynamicsprocessor",
+                    "dispersion": "flanger",
+                    "frequencyshifter": "eq",
+                    "slewdistortion": "waveshaper",
+                }
+                alternative = alt_map.get(effect.lower())
+                if alternative:
+                    reason += f" Consider '{alternative}' instead."
+                result["warning"] = reason
         return json.dumps(result)
     except ValueError as exc:
         return json.dumps({
@@ -1034,6 +1068,113 @@ def render_project(
         result["size_bytes"] = out_file.stat().st_size
     else:
         result["error"] = f"Render failed: {proc.stderr.strip() or proc.stdout.strip()}"
+    return json.dumps(result)
+
+
+@mcp.tool()
+def list_available_plugins() -> str:
+    """List ALL plugins installed in your LMMS, dynamically detected.
+
+    Includes built-in instruments/effects plus any custom plugins the
+    user added to LMMS's plugins folder. Custom plugins can be used
+    directly by name in add_instrument_track / add_effect.
+    """
+    known_inst = set(KNOWN_INSTRUMENTS.keys())
+    known_eff = set(effects_mod.KNOWN_EFFECTS.keys())
+    classified = lmms_app.classify_installed_plugins(known_inst, known_eff)
+    exe = lmms_app.find_lmms_exe()
+    return json.dumps({
+        "lmms_found": exe is not None,
+        "version": lmms_app.get_lmms_version(),
+        "built_in_instruments": sorted(known_inst),
+        "built_in_effects": sorted(known_eff),
+        "custom_plugins_unknown_type": classified["unknown"],
+        "note": "Custom plugins can be used by their DLL name in "
+                "add_instrument_track or add_effect. For VST .dll files "
+                "on disk use add_vst_track instead.",
+    }, indent=2)
+
+
+@mcp.tool()
+def scan_vst_directory(directory: str, recursive: bool = True) -> str:
+    """Scan a folder for VST plugin DLLs (.dll files).
+
+    Args:
+        directory: Path to scan (e.g. "C:/VSTPlugins")
+        recursive: Include subdirectories
+    """
+    try:
+        plugins = lmms_app.find_vst_plugins(directory, recursive)
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "directory": str(directory),
+        "count": len(plugins),
+        "plugins": plugins,
+        "hint": "Use add_vst_track with a plugin path. Note: whether a "
+                "DLL is an instrument or effect is decided by LMMS on "
+                "load.",
+    }, indent=2)
+
+
+@mcp.tool()
+def add_vst_track(
+    name: str,
+    dll_path: str,
+    mixer_channel: int = 0,
+    volume: int = 100,
+    panning: int = 0,
+) -> str:
+    """Add a track hosting a VST plugin (.dll file).
+
+    Uses LMMS's Vestige host. The VST must be compatible with your
+    LMMS architecture (64-bit LMMS needs 64-bit VSTs).
+
+    Args:
+        name: Track name (e.g. "Spire Lead")
+        dll_path: Absolute path to the VST .dll file
+        mixer_channel: Mixer channel number (0=Master)
+        volume: Track volume (0-200)
+        panning: Track panning (-100 to +100)
+    """
+    proj = get_project()
+    path = Path(dll_path)
+    if not path.is_file():
+        return json.dumps({
+            "error": f"VST file not found: {dll_path}",
+            "hint": "Use scan_vst_directory to find VST plugins.",
+        })
+    if path.suffix.lower() != ".dll":
+        return json.dumps({
+            "error": f"'{path.name}' is not a .dll file."
+        })
+
+    result = proj.add_track(
+        "instrument", name,
+        instrument="vestige",
+        mixer_channel=mixer_channel,
+        volume=volume,
+        panning=panning,
+    )
+
+    # Set the plugin path on the vestige element
+    try:
+        track_idx = result.get("track_index")
+        track = xml_parser.find_track_element(proj.root, track_idx)
+        vestige_el = track.find("instrumenttrack/instrument/vestige")
+        if vestige_el is not None:
+            # Prefer path relative to LMMS dir when possible
+            exe = lmms_app.find_lmms_exe()
+            try:
+                rel = path.relative_to(exe.parent) if exe else None
+            except ValueError:
+                rel = None
+            vestige_el.set("plugin", str(rel if rel else path))
+    except (ValueError, IndexError):
+        pass
+
+    result["vst"] = str(path)
+    result["message"] = f"Added VST track '{name}' hosting {path.name}"
     return json.dumps(result)
 
 

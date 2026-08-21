@@ -968,10 +968,13 @@ def embed_zyn_preset(
             f"Zyn presets can only be loaded on zynaddsubfx tracks."
         )
 
-    # Validate and normalize the preset XML (strip DOCTYPE - ElementTree
-    # cannot parse it and LMMS does not need it)
+    # Validate and normalize the preset XML: strip leading whitespace and
+    # the DOCTYPE (ElementTree cannot parse it and LMMS does not need it).
+    # Many factory .xiz files start with a newline before <?xml ...?>,
+    # which violates the XML spec and breaks strict parsers.
     import re as _re
     cleaned = _re.sub(r"<!DOCTYPE[^>]*>", "", preset_xml)
+    cleaned = cleaned.lstrip()
     try:
         preset_root = ET.fromstring(cleaned)
     except ET.ParseError as exc:

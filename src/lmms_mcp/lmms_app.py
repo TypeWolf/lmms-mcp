@@ -108,3 +108,53 @@ def check_plugin_available(plugin_name: str) -> tuple[bool, str]:
         f"(found {len(installed)} plugins). It may require a newer "
         f"LMMS version."
     )
+
+
+def classify_installed_plugins(
+    known_instruments: set[str],
+    known_effects: set[str],
+) -> dict[str, list[str]]:
+    """Classify all installed plugin DLLs by comparing with known names.
+
+    Returns dict with keys "instruments", "effects", "unknown".
+    Unknown DLLs are custom/newer plugins the user added - they can be
+    used but their type (instrument vs effect) is not known from the
+    filename alone.
+    """
+    installed = get_installed_plugins()
+    result: dict[str, list[str]] = {"instruments": [], "effects": [], "unknown": []}
+    for name in sorted(installed):
+        if name.startswith("lib"):
+            continue  # support libraries, not plugins
+        if name in known_instruments or any(
+            name in aliases for aliases in PLUGIN_ALIASES.values()
+        ) and name in known_instruments:
+            result["instruments"].append(name)
+        elif name in known_effects:
+            result["effects"].append(name)
+        else:
+            result["unknown"].append(name)
+    return result
+
+
+def find_vst_plugins(directory: str | Path, recursive: bool = True) -> list[dict]:
+    """Scan a directory for VST plugin DLLs.
+
+    Returns list of dicts with name and path. Note: any .dll could be a
+    VST effect or instrument - LMMS decides on load.
+    """
+    root = Path(directory)
+    if not root.is_dir():
+        raise ValueError(f"Directory not found: {directory}")
+    it = root.rglob("*.dll") if recursive else root.glob("*.dll")
+    skip = {"lmms.exe", "remotevstplugin.exe", "32bitvsthelper.exe"}
+    results = []
+    for dll in sorted(it):
+        if dll.stem.lower() in skip:
+            continue
+        results.append({
+            "name": dll.stem,
+            "path": str(dll),
+            "size_kb": round(dll.stat().st_size / 1024),
+        })
+    return results
