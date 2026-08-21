@@ -7,6 +7,10 @@ An MCP (Model Context Protocol) server for [LMMS](https://lmms.io/) - the free, 
 - **Create & save** LMMS projects (`.mmpz` compressed, `.mmp` XML)
 - **Add tracks**: Instrument, Sample, Pattern (Beat/Bassline), Automation
 - **Add notes** with MIDI key, position, velocity, and panning
+- **Effects**: 18 built-in effects on tracks and mixer channels (delay, reverb, EQ, compressor...)
+- **ZynAddSubFX presets**: Load any of ~950 factory instruments (.xiz), tune parameters
+- **Arrangement**: Place patterns, BB clips and audio clips on the song timeline
+- **Automation**: Tempo ramps, volume swells, panning curves - linked to real LMMS models
 - **Mixer control**: Create channels, set volume, name channels
 - **Song settings**: Tempo (BPM), time signature, master volume/pitch
 - **Musical utilities**: Note name conversion, scale generation, tick/bar conversion
@@ -145,6 +149,24 @@ python -m lmms_mcp
 | `list_zyn_presets` | Browse ~950 factory presets (.xiz) by category |
 | `load_zyn_preset` | Load a preset into a zynaddsubfx track |
 | `set_zyn_params` | Set portamento, filter, FM gain, resonance etc. |
+
+### Arrangement (Song Editor Timeline)
+
+| Tool | Description |
+|------|-------------|
+| `place_pattern` | Place an empty pattern clip on an instrument track |
+| `place_bb_clip` | Trigger a BB pattern at a given time |
+| `place_sample_clip` | Place an audio file clip on a sample track |
+| `assign_sample_file` | Assign/replace the audio file on sample clips |
+| `move_clip` | Move a clip to a new position |
+| `delete_clip` | Delete a clip at a position |
+| `get_arrangement` | Full timeline overview of all clips |
+
+### Automation
+
+| Tool | Description |
+|------|-------------|
+| `add_automation` | Create automation curves for tempo, master volume/pitch, track volume/panning and mixer channel volume |
 
 ### Utilities
 

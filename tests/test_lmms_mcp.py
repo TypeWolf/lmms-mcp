@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lmms_mcp.models import Note, midi_to_note_name, note_name_to_midi, bars_to_ticks, ticks_to_bars
-from lmms_mcp.xml_parser import create_empty_project, load_project, save_project, find_tracks, add_instrument_track, add_note_to_track
+from lmms_mcp.xml_parser import create_empty_project, load_project, save_project, find_tracks, add_instrument_track, add_note_to_track, add_pattern_track, add_sample_track
 from lmms_mcp.project import LMMSProject
 
 
@@ -331,6 +331,192 @@ class TestZynAddSubFX:
         root = self._make_zyn_project()
         with pytest.raises(ValueError, match="out of range"):
             find_track_element(root, 5)
+
+
+class TestArrangement:
+    """Tests for song editor arrangement (clips, patterns, samples)."""
+
+    def _project_with_tracks(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        add_pattern_track(root, "BB")
+        return root
+
+    def test_place_instrument_pattern(self):
+        from lmms_mcp.xml_parser import place_instrument_pattern
+        root = self._project_with_tracks()
+        pattern = place_instrument_pattern(root, 0, position=768, name="Drop")
+        assert pattern.get("pos") == "768"
+        assert pattern.get("name") == "Drop"
+
+    def test_place_pattern_wrong_track_type(self):
+        from lmms_mcp.xml_parser import place_instrument_pattern
+        root = self._project_with_tracks()
+        with pytest.raises(ValueError, match="not an instrument track"):
+            place_instrument_pattern(root, 1, position=0)
+
+    def test_add_sample_clip(self):
+        from lmms_mcp.xml_parser import add_sample_track, add_sample_clip
+        root = self._project_with_tracks()
+        add_sample_track(root, "FX")
+        clip = add_sample_clip(root, 2, "drums/kick01.ogg", 192, 384)
+        assert clip.get("src") == "drums/kick01.ogg"
+        assert clip.get("pos") == "192"
+
+    def test_add_sample_clip_requires_sample_track(self):
+        from lmms_mcp.xml_parser import add_sample_clip
+        root = self._project_with_tracks()
+        with pytest.raises(ValueError, match="not a sample track"):
+            add_sample_clip(root, 0, "test.wav")
+
+    def test_get_arrangement_sorted(self):
+        from lmms_mcp.xml_parser import (
+            place_instrument_pattern, add_bb_clip, get_arrangement,
+            add_sample_track, add_sample_clip,
+        )
+        root = self._project_with_tracks()
+        place_instrument_pattern(root, 0, 768)
+        add_bb_clip(root, 1, 0)
+        add_sample_track(root, "S")
+        add_sample_clip(root, 2, "a.wav", 384)
+
+        clips = get_arrangement(root)
+        kinds = [c["kind"] for c in clips]
+        positions = [c["pos"] for c in clips]
+        assert kinds == ["bbtco", "sampleclip", "pattern"]
+        assert positions == sorted(positions)
+
+    def test_move_and_delete_clip(self):
+        from lmms_mcp.xml_parser import (
+            place_instrument_pattern, move_clip, delete_clip, get_arrangement,
+        )
+        root = self._project_with_tracks()
+        place_instrument_pattern(root, 0, 192)
+        result = move_clip(root, 0, 192, 960)
+        assert result["new_pos"] == 960
+        clips = get_arrangement(root)
+        assert clips[0]["pos"] == 960
+        result = delete_clip(root, 0, 960)
+        assert len(get_arrangement(root)) == 0
+
+    def test_move_nonexistent_clip(self):
+        from lmms_mcp.xml_parser import move_clip
+        root = self._project_with_tracks()
+        with pytest.raises(ValueError, match="No clip found"):
+            move_clip(root, 0, 999, 100)
+
+
+class TestAutomation:
+    """Tests for automation tracks and curves."""
+
+    def _root(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        return root
+
+    def test_automate_attribute_creates_element(self):
+        from lmms_mcp.xml_parser import automate_attribute
+        root = self._root()
+        track = find_tracks(root)[0]
+        inst = track.find("instrumenttrack")
+        model_id = automate_attribute(inst, "vol", "100")
+        assert model_id > 0
+        el = inst.find("vol")
+        assert el is not None
+        assert el.get("id") == str(model_id)
+        assert "vol" not in inst.attrib
+
+    def test_automate_attribute_idempotent(self):
+        from lmms_mcp.xml_parser import automate_attribute
+        root = self._root()
+        track = find_tracks(root)[0]
+        inst = track.find("instrumenttrack")
+        id1 = automate_attribute(inst, "vol", "100")
+        id2 = automate_attribute(inst, "vol", "100")
+        assert id1 == id2
+        assert len(inst.findall("vol")) == 1
+
+    def test_add_automation_track(self):
+        from lmms_mcp.xml_parser import add_automation_track
+        root = self._root()
+        track = add_automation_track(
+            root, "Ramp", [(0, 120), (1536, 140)], target_id=42
+        )
+        assert track.get("type") == "5"
+        pattern = track.find("automationpattern")
+        times = pattern.findall("time")
+        assert len(times) == 2
+        assert times[0].get("value") == "120"
+        obj = pattern.find("object")
+        assert obj.get("id") == "42"
+
+    def test_add_automation_track_empty_points(self):
+        from lmms_mcp.xml_parser import add_automation_track
+        root = self._root()
+        with pytest.raises(ValueError, match="At least one point"):
+            add_automation_track(root, "Empty", [])
+
+    def test_resolve_song_target(self):
+        from lmms_mcp.xml_parser import resolve_automation_target
+        root = self._root()
+        model_id, value = resolve_automation_target(root, "song", 0, "tempo")
+        assert value == 140.0
+        head = root.find("head")
+        bpm_el = head.find("bpm")
+        assert bpm_el is not None
+        assert bpm_el.get("id") == str(model_id)
+
+    def test_resolve_track_volume(self):
+        from lmms_mcp.xml_parser import resolve_automation_target
+        root = self._root()
+        model_id, value = resolve_automation_target(
+            root, "track", 0, "volume"
+        )
+        assert value == 100.0
+        inst = find_tracks(root)[0].find("instrumenttrack")
+        assert inst.find("vol").get("id") == str(model_id)
+
+    def test_resolve_invalid_param(self):
+        from lmms_mcp.xml_parser import resolve_automation_target
+        root = self._root()
+        with pytest.raises(ValueError, match="Unknown song parameter"):
+            resolve_automation_target(root, "song", 0, "nonexistent")
+
+    def test_resolve_mixer_out_of_range(self):
+        from lmms_mcp.xml_parser import resolve_automation_target
+        root = self._root()
+        with pytest.raises(ValueError, match="out of range"):
+            resolve_automation_target(root, "mixer", 99, "volume")
+
+    def test_full_automation_roundtrip(self):
+        """Automation must survive .mmpz save/load with intact ID links."""
+        from lmms_mcp.xml_parser import (
+            resolve_automation_target, add_automation_track,
+        )
+        root = self._root()
+        model_id, _ = resolve_automation_target(root, "song", 0, "tempo")
+        add_automation_track(
+            root, "Tempo Ramp", [(0, 120), (1536, 140)], target_id=model_id
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".mmpz", delete=False) as f:
+            path = f.name
+        save_project(path, root)
+        root2 = load_project(path)
+
+        # Model element with id survives
+        bpm_el = root2.find("head/bpm")
+        assert bpm_el is not None
+        saved_id = int(bpm_el.get("id"))
+
+        # Automation object reference matches the model id
+        auto_tracks = [
+            t for t in find_tracks(root2) if t.get("type") == "5"
+        ]
+        assert len(auto_tracks) == 1
+        obj = auto_tracks[0].find("automationpattern/object")
+        assert int(obj.get("id")) == saved_id
+        Path(path).unlink()
 
 
 if __name__ == "__main__":

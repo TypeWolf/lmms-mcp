@@ -895,6 +895,289 @@ def set_zyn_params(
 
 
 # ──────────────────────────────────────────────────────────────────
+# ARRANGEMENT TOOLS (SONG EDITOR TIMELINE)
+# ──────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def assign_sample_file(track_index: int, file_path: str) -> str:
+    """Assign an audio file to all clips on a sample track.
+
+    Use relative paths for LMMS's built-in samples (e.g.
+    "drums/kick01.ogg") or absolute paths for your own files.
+
+    Args:
+        track_index: Index of the sample track
+        file_path: Audio file path (WAV/OGG/MP3/FLAC)
+    """
+    proj = get_project()
+    try:
+        track = xml_parser.find_track_element(proj.root, track_index)
+        if xml_parser.get_track_type(track) != 2:
+            return json.dumps({
+                "error": f"Track {track_index} is not a sample track"
+            })
+        clips = track.findall("sampleclip")
+        if not clips:
+            clip = xml_parser.add_sample_clip(
+                proj.root, track_index, file_path, position=0
+            )
+            count = 1
+        else:
+            for clip in clips:
+                clip.set("src", file_path)
+            count = len(clips)
+        return json.dumps({
+            "track_index": track_index,
+            "file": file_path,
+            "clips_updated": count,
+            "message": f"Assigned '{file_path}' to {count} clip(s) "
+                       f"on track {track_index}",
+        })
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def place_sample_clip(
+    track_index: int,
+    file_path: str,
+    pos_bars: float = 0,
+    length_bars: float = 1,
+) -> str:
+    """Place an audio file clip on a sample track at a given bar.
+
+    Args:
+        track_index: Index of the sample track
+        file_path: Audio file path (relative to LMMS samples or absolute)
+        pos_bars: Start position in bars (0 = beginning)
+        length_bars: Clip length in bars
+    """
+    proj = get_project()
+    pos = bars_to_ticks(pos_bars)
+    length = bars_to_ticks(length_bars)
+    try:
+        clip = xml_parser.add_sample_clip(proj.root, track_index, file_path, pos, length)
+        return json.dumps({
+            "track_index": track_index,
+            "file": file_path,
+            "pos_ticks": pos,
+            "len_ticks": length,
+            "message": f"Placed '{file_path}' at bar {pos_bars} "
+                       f"({pos} ticks)",
+        })
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def place_pattern(
+    track_index: int,
+    pos_bars: float = 0,
+    name: str | None = None,
+    length_bars: float = 1,
+) -> str:
+    """Place an empty pattern clip on an instrument track (song arrangement).
+
+    The pattern starts empty; add notes with add_note (they go into the
+    first pattern) or use this to sketch the arrangement structure first.
+
+    Args:
+        track_index: Index of the instrument track
+        pos_bars: Start position in bars (0 = beginning)
+        name: Optional pattern name (defaults to track name)
+        length_bars: Pattern length in bars
+    """
+    proj = get_project()
+    pos = bars_to_ticks(pos_bars)
+    length = bars_to_ticks(length_bars)
+    try:
+        pattern = xml_parser.place_instrument_pattern(
+            proj.root, track_index, pos, name, length
+        )
+        return json.dumps({
+            "track_index": track_index,
+            "pattern_name": pattern.get("name"),
+            "pos_ticks": pos,
+            "len_ticks": length,
+            "message": f"Placed pattern '{pattern.get('name')}' at bar "
+                       f"{pos_bars} on track {track_index}",
+        })
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def place_bb_clip(
+    bb_track_index: int,
+    pos_bars: float = 0,
+    length_bars: float = 4,
+) -> str:
+    """Place a beat/bassline clip on a pattern track in the song editor.
+
+    This triggers the BB pattern (created via add_pattern_track and
+    filled with notes) to play at the given time.
+
+    Args:
+        bb_track_index: Index of the pattern (BB) track
+        pos_bars: Start position in bars
+        length_bars: Clip length in bars (default 4 = one BB cycle of 16 steps)
+    """
+    proj = get_project()
+    pos = bars_to_ticks(pos_bars)
+    length = bars_to_ticks(length_bars)
+    try:
+        clip = xml_parser.add_bb_clip(proj.root, bb_track_index, pos, length)
+        return json.dumps({
+            "track_index": bb_track_index,
+            "pos_ticks": pos,
+            "len_ticks": length,
+            "message": f"Placed BB clip at bar {pos_bars} "
+                       f"(length {length_bars} bars)",
+        })
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def move_clip(track_index: int, old_pos_bars: float, new_pos_bars: float) -> str:
+    """Move a clip (pattern/bbtco/sampleclip) to a new time position.
+
+    Args:
+        track_index: Track containing the clip
+        old_pos_bars: Current start position in bars
+        new_pos_bars: New start position in bars
+    """
+    proj = get_project()
+    try:
+        result = xml_parser.move_clip(
+            proj.root,
+            track_index,
+            bars_to_ticks(old_pos_bars),
+            bars_to_ticks(new_pos_bars),
+        )
+        return json.dumps(result)
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def delete_clip(track_index: int, pos_bars: float) -> str:
+    """Delete a clip at a given position from a track.
+
+    Args:
+        track_index: Track containing the clip
+        pos_bars: Clip start position in bars
+    """
+    proj = get_project()
+    try:
+        result = xml_parser.delete_clip(proj.root, track_index, bars_to_ticks(pos_bars))
+        return json.dumps(result)
+    except (ValueError, IndexError) as exc:
+        return json.dumps({"error": str(exc)})
+
+
+@mcp.tool()
+def get_arrangement() -> str:
+    """Get the full song editor arrangement: all clips sorted by time.
+
+    Shows every pattern, BB clip, sample clip and automation curve with
+    their positions and lengths in ticks and bars.
+    """
+    proj = get_project()
+    clips = xml_parser.get_arrangement(proj.root)
+    for c in clips:
+        c["pos_bars"] = round(ticks_to_bars(c["pos"]), 3)
+        c["len_bars"] = round(ticks_to_bars(c["len"]), 3)
+    total = max((c["pos"] + c["len"] for c in clips), default=0)
+    return json.dumps({
+        "clip_count": len(clips),
+        "song_length_bars": round(ticks_to_bars(total), 2),
+        "clips": clips,
+    }, indent=2)
+
+
+# ──────────────────────────────────────────────────────────────────
+# AUTOMATION TOOLS
+# ──────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def add_automation(
+    target_type: str,
+    param: str,
+    points: list[dict],
+    target_index: int = 0,
+    name: str | None = None,
+    smooth: bool = True,
+) -> str:
+    """Create an automation curve that controls a parameter over time.
+
+    Automatable targets:
+    - song + tempo: Song BPM (e.g. tempo ramps)
+    - song + master_volume / master_pitch
+    - track + volume / panning (target_index = track index)
+    - mixer + volume (target_index = mixer channel number)
+
+    Args:
+        target_type: "song", "track" or "mixer"
+        param: Parameter name (see above)
+        points: Curve points as list of {"bar": float, "value": float}.
+            Example: [{"bar": 0, "value": 120}, {"bar": 8, "value": 140}]
+        target_index: Track index or mixer channel (ignored for "song")
+        name: Automation name (defaults to parameter name)
+        smooth: True = smooth curves (cubic), False = linear steps
+    """
+    proj = get_project()
+    if not points:
+        return json.dumps({"error": "points list is empty"})
+
+    # Convert bar-based points to tick-based
+    tick_points: list[tuple[int, float]] = []
+    for i, pt in enumerate(points):
+        try:
+            bar = float(pt["bar"])
+            value = float(pt["value"])
+        except (KeyError, TypeError, ValueError):
+            return json.dumps({
+                "error": f"Point {i} must be {{'bar': float, 'value': float}}"
+            })
+        tick_points.append((bars_to_ticks(bar), value))
+
+    try:
+        model_id, current_value = xml_parser.resolve_automation_target(
+            proj.root, target_type, target_index, param
+        )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    auto_name = name or param.replace("_", " ").title()
+    try:
+        track = xml_parser.add_automation_track(
+            proj.root,
+            auto_name,
+            tick_points,
+            target_id=model_id,
+            progression=1 if smooth else 0,
+        )
+    except ValueError as exc:
+        return json.dumps({"error": str(exc)})
+
+    tracks = xml_parser.find_tracks(proj.root)
+    return json.dumps({
+        "automating": f"{target_type}[{target_index}].{param}",
+        "current_value": current_value,
+        "model_id": model_id,
+        "automation_track_index": len(tracks) - 1,
+        "points": len(tick_points),
+        "smooth": smooth,
+        "message": f"Created automation '{auto_name}' controlling "
+                   f"{target_type}[{target_index}].{param} with "
+                   f"{len(tick_points)} points",
+    })
+
+
+# ──────────────────────────────────────────────────────────────────
 # TRANSPORT / SONG SETTINGS TOOLS
 # ──────────────────────────────────────────────────────────────────
 

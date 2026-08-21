@@ -84,6 +84,10 @@ class Track:
     patterns: list[Pattern] = field(default_factory=list)
     index: int = 0
 
+    @property
+    def type_name(self) -> str:
+        return self.track_type.name
+
     def to_dict(self) -> dict:
         return {
             "index": self.index,
@@ -133,6 +137,14 @@ class SongInfo:
     mixer_channels: list[MixerChannel] = field(default_factory=list)
     file_path: str = ""
     modified: bool = False
+
+    @property
+    def time_signature(self) -> str:
+        return f"{self.time_sig_numerator}/{self.time_sig_denominator}"
+
+    @property
+    def track_count(self) -> int:
+        return len(self.tracks)
 
     def to_dict(self) -> dict:
         return {

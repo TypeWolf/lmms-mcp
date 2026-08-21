@@ -489,6 +489,407 @@ def set_head_attribute(root: ET.Element, attr: str, value: str) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────
+# ARRANGEMENT: SAMPLE CLIPS & PATTERN PLACEMENT
+# ──────────────────────────────────────────────────────────────────
+
+def add_sample_clip(
+    root: ET.Element,
+    track_index: int,
+    src: str,
+    position: int = 0,
+    length: int = 192,
+) -> ET.Element:
+    """Add a sample clip (audio file placement) to a sample track.
+
+    Args:
+        root: Project root element.
+        track_index: Index of the sample track.
+        src: Audio file path (relative to LMMS samples dir or absolute).
+        position: Start position in ticks.
+        length: Clip length in ticks.
+    """
+    tracks = find_tracks(root)
+    if not 0 <= track_index < len(tracks):
+        raise IndexError(f"Track index {track_index} out of range")
+    track = tracks[track_index]
+    if get_track_type(track) != 2:
+        raise ValueError(
+            f"Track {track_index} is not a sample track "
+            f"(type={get_track_type(track)}). Use add_sample_track first."
+        )
+
+    clip = ET.SubElement(track, "sampleclip", {
+        "pos": str(position),
+        "len": str(length),
+        "src": src,
+        "muted": "0",
+        "off": "0",
+    })
+    return clip
+
+
+def place_instrument_pattern(
+    root: ET.Element,
+    track_index: int,
+    position: int,
+    name: str | None = None,
+    length: int = 192,
+) -> ET.Element:
+    """Place an empty pattern clip at a position on an instrument track.
+
+    This is the song-editor arrangement: each <pattern> element's pos
+    attribute determines when it plays.
+
+    Args:
+        root: Project root element.
+        track_index: Index of the instrument track.
+        position: Start position in ticks (192 = 1 bar).
+        name: Optional pattern name.
+        length: Pattern length in ticks (default 192 = 1 bar).
+    """
+    tracks = find_tracks(root)
+    if not 0 <= track_index < len(tracks):
+        raise IndexError(f"Track index {track_index} out of range")
+    track = tracks[track_index]
+    if get_track_type(track) != 0:
+        raise ValueError(
+            f"Track {track_index} is not an instrument track "
+            f"(type={get_track_type(track)})."
+        )
+
+    pname = name or f"{track.get('name', 'Pattern')}"
+    pattern = ET.SubElement(track, "pattern", {
+        "pos": str(position),
+        "len": str(length),
+        "name": pname,
+        "muted": "0",
+        "steps": "16",
+        "type": "1",
+    })
+    return pattern
+
+
+def get_arrangement(root: ET.Element) -> list[dict]:
+    """Get all clips in the song editor arranged by time.
+
+    Returns a list of clip dicts sorted by position: instrument patterns,
+    BB clips (bbtco), sample clips and automation patterns.
+    """
+    tracks = find_tracks(root)
+    clips = []
+    for idx, track in enumerate(tracks):
+        ttype = get_track_type(track)
+        tname = track.get("name", "?")
+        if ttype == 0:
+            for pat in track.findall("pattern"):
+                notes = pat.findall("note")
+                clips.append({
+                    "track_index": idx, "track": tname, "kind": "pattern",
+                    "name": pat.get("name", ""),
+                    "pos": int(pat.get("pos", "0")),
+                    "len": int(pat.get("len", "192")),
+                    "notes": len(notes),
+                    "muted": pat.get("muted", "0") == "1",
+                })
+        elif ttype == 1:
+            for bbtco in track.findall("bbtco"):
+                clips.append({
+                    "track_index": idx, "track": tname, "kind": "bbtco",
+                    "name": bbtco.get("name", ""),
+                    "pos": int(bbtco.get("pos", "0")),
+                    "len": int(bbtco.get("len", "192")),
+                    "notes": None,
+                    "muted": bbtco.get("muted", "0") == "1",
+                })
+        elif ttype == 2:
+            for sc in track.findall("sampleclip"):
+                clips.append({
+                    "track_index": idx, "track": tname, "kind": "sampleclip",
+                    "name": Path(sc.get("src", "")).stem,
+                    "pos": int(sc.get("pos", "0")),
+                    "len": int(sc.get("len", "192")),
+                    "notes": None,
+                    "muted": sc.get("muted", "0") == "1",
+                    "src": sc.get("src", ""),
+                })
+        elif ttype in (5, 6):
+            for ap in track.findall("automationpattern"):
+                clips.append({
+                    "track_index": idx, "track": tname, "kind": "automation",
+                    "name": ap.get("name", ""),
+                    "pos": int(ap.get("pos", "0")),
+                    "len": int(ap.get("len", "192")),
+                    "notes": None,
+                    "points": len(ap.findall("time")),
+                    "muted": ap.get("mute", "0") == "1",
+                })
+
+    clips.sort(key=lambda c: (c["pos"], c["track_index"]))
+    return clips
+
+
+def move_clip(
+    root: ET.Element,
+    track_index: int,
+    old_position: int,
+    new_position: int,
+) -> dict:
+    """Move a clip (pattern/bbtco/sampleclip) to a new position."""
+    tracks = find_tracks(root)
+    if not 0 <= track_index < len(tracks):
+        raise IndexError(f"Track index {track_index} out of range")
+    track = tracks[track_index]
+
+    tags = ["pattern", "bbtco", "sampleclip"]
+    for tag in tags:
+        for clip in track.findall(tag):
+            if int(clip.get("pos", "-1")) == old_position:
+                clip.set("pos", str(new_position))
+                return {
+                    "track_index": track_index,
+                    "clip": tag,
+                    "old_pos": old_position,
+                    "new_pos": new_position,
+                    "message": f"Moved {tag} from {old_position} to "
+                               f"{new_position} ticks",
+                }
+    raise ValueError(
+        f"No clip found at position {old_position} on track {track_index}"
+    )
+
+
+def delete_clip(root: ET.Element, track_index: int, position: int) -> dict:
+    """Delete a clip at a given position from a track."""
+    tracks = find_tracks(root)
+    if not 0 <= track_index < len(tracks):
+        raise IndexError(f"Track index {track_index} out of range")
+    track = tracks[track_index]
+
+    for tag in ["pattern", "bbtco", "sampleclip"]:
+        for clip in track.findall(tag):
+            if int(clip.get("pos", "-1")) == position:
+                track.remove(clip)
+                return {
+                    "removed": tag,
+                    "position": position,
+                    "message": f"Deleted {tag} at position {position}",
+                }
+    raise ValueError(
+        f"No clip found at position {position} on track {track_index}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────
+# AUTOMATION SUPPORT
+# ──────────────────────────────────────────────────────────────────
+
+# Global ID counter for automatable models - IDs just need to be unique
+# integers within the project; LMMS re-maps them on load via changeID().
+_model_id_counter = [10000]
+
+
+def next_model_id() -> int:
+    """Allocate a unique model ID for automation references."""
+    _model_id_counter[0] += 1
+    return _model_id_counter[0]
+
+
+def automate_attribute(
+    parent: ET.Element,
+    attr_name: str,
+    current_value: str,
+) -> int:
+    """Convert an attribute into an automatable model element.
+
+    LMMS saves automated values as child elements with an id instead of
+    plain attributes:  <vol id="123" value="100"/>  instead of vol="100".
+    The same id must be referenced by an automation pattern's <object>.
+
+    Args:
+        parent: Element holding the attribute (e.g. instrumenttrack).
+        attr_name: Attribute name (e.g. "vol", "pan", "bpm").
+        current_value: Current value string.
+
+    Returns:
+        The allocated model id.
+    """
+    # Already automated?
+    existing = parent.find(attr_name)
+    if existing is not None and existing.get("id"):
+        return int(existing.get("id"))
+
+    model_id = next_model_id()
+    # Remove the plain attribute if present
+    if attr_name in parent.attrib:
+        del parent.attrib[attr_name]
+    ET.SubElement(parent, attr_name, {
+        "id": str(model_id),
+        "value": current_value,
+        "scale_type": "linear",
+    })
+    return model_id
+
+
+AUTOMATION_TARGETS = {
+    # key -> (description, value_range_hint)
+    "tempo": ("Song tempo (BPM)", "10-999"),
+    "master_volume": ("Master volume", "0-200"),
+    "master_pitch": ("Master pitch (semitones)", "-12 to +12"),
+}
+
+
+def add_automation_track(
+    root: ET.Element,
+    name: str,
+    points: list[tuple[int, float]],
+    target_id: int | None = None,
+    progression: int = 0,
+    tension: float = 1.0,
+    position: int = 0,
+) -> ET.Element:
+    """Add an automation track with a pattern (curve).
+
+    Args:
+        root: Project root element.
+        name: Automation track/pattern name (e.g. "Volume swell").
+        points: List of (tick_position, value) tuples defining the curve.
+        target_id: Model id to automate (from automate_attribute), or
+            None for an unlinked curve.
+        progression: 0=linear, 1=cubic hermite (smooth curves).
+        tension: Curve tension for smooth interpolation (default 1.0).
+        position: Pattern start offset in ticks.
+
+    Returns:
+        The created track element.
+    """
+    if not points:
+        raise ValueError("At least one point is required")
+
+    song = root.find("song")
+    container = song.find("trackcontainer[@type='song']")
+
+    track = ET.SubElement(container, "track", {
+        "muted": "0",
+        "type": "5",
+        "name": name,
+        "solo": "0",
+    })
+    ET.SubElement(track, "automationtrack")
+
+    max_pos = max(p[0] for p in points)
+    pattern = ET.SubElement(track, "automationpattern", {
+        "pos": str(position),
+        "len": str(max(192, max_pos + 1)),
+        "name": name,
+        "prog": str(progression),
+        "tens": str(tension),
+        "mute": "0",
+        "off": "0",
+        "autoresize": "1",
+    })
+
+    for pt_pos, value in sorted(points):
+        ET.SubElement(pattern, "time", {
+            "pos": str(int(pt_pos)),
+            "value": str(value),
+            "outValue": str(value),
+            "inTan": "0",
+            "outTan": "0",
+            "lockedTan": "0",
+        })
+
+    if target_id is not None:
+        ET.SubElement(pattern, "object", {"id": str(target_id)})
+
+    return track
+
+
+def resolve_automation_target(
+    root: ET.Element,
+    target_type: str,
+    target_index: int,
+    param: str,
+) -> tuple[int, float]:
+    """Resolve an automation target to (model_id, current_value).
+
+    Args:
+        root: Project root element.
+        target_type: One of "track", "mixer", "song".
+        target_index: Track/mixer channel index (ignored for "song").
+        param: Parameter to automate:
+            - track: "volume" or "panning"
+            - mixer: "volume"
+            - song: "tempo", "master_volume", "master_pitch"
+
+    Returns:
+        Tuple of (model_id, current_value).
+
+    Raises:
+        ValueError: If the target/param combination is invalid.
+    """
+    if target_type == "song":
+        head = root.find("song/head")
+        if head is None:
+            head = root.find("head")
+        attr_map = {
+            "tempo": ("bpm", "140"),
+            "master_volume": ("mastervol", "100"),
+            "master_pitch": ("masterpitch", "0"),
+        }
+        if param not in attr_map:
+            raise ValueError(
+                f"Unknown song parameter '{param}'. Valid: "
+                f"{sorted(attr_map.keys())}"
+            )
+        attr, default = attr_map[param]
+        value = head.get(attr, default)
+        model_id = automate_attribute(head, attr, value)
+        return model_id, float(value)
+
+    if target_type == "track":
+        track = find_track_element(root, target_index)
+        inst_track = track.find("instrumenttrack")
+        if inst_track is None:
+            st = track.find("sampletrack")
+            if st is None:
+                raise ValueError(
+                    f"Track {target_index} has no automatable volume/panning"
+                )
+            parent, vol_attr, pan_attr = st, "vol", "pan"
+        else:
+            parent, vol_attr, pan_attr = inst_track, "vol", "pan"
+
+        if param == "volume":
+            value = parent.get(vol_attr, "100")
+            return automate_attribute(parent, vol_attr, value), float(value)
+        if param == "panning":
+            value = parent.get(pan_attr, "0")
+            return automate_attribute(parent, pan_attr, value), float(value)
+        raise ValueError(
+            f"Unknown track parameter '{param}'. Valid: volume, panning"
+        )
+
+    if target_type == "mixer":
+        song = root.find("song")
+        mixer = song.find("mixer")
+        channels = mixer.findall("mixerchannel")
+        if not 0 <= target_index < len(channels):
+            raise ValueError(
+                f"Mixer channel {target_index} out of range "
+                f"(0-{len(channels) - 1})"
+            )
+        channel = channels[target_index]
+        if param != "volume":
+            raise ValueError(
+                f"Unknown mixer parameter '{param}'. Valid: volume"
+            )
+        value = channel.get("volume", "1")
+        return automate_attribute(channel, "volume", value), float(value)
+
+    raise ValueError("target_type must be 'track', 'mixer' or 'song'")
+
+
+# ──────────────────────────────────────────────────────────────────
 # INSTRUMENT PARAMETER / PRESET SUPPORT
 # ──────────────────────────────────────────────────────────────────
 
