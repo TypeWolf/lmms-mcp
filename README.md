@@ -180,6 +180,20 @@ the LMMS GUI. The installed LMMS is only used for: preset discovery,
 plugin availability checks (warns about plugins your version lacks,
 e.g. SlicerT/Xpressive require LMMS 1.3+) and audio rendering.
 
+Plugin availability has three states: detected, missing from a nonempty
+inventory, or unknown. An unavailable/empty inventory and an assumed statically
+linked plugin are not verification. `get_lmms_info` lists those plugins as
+unverified; the `*_verified_available` fields only indicate detected plugin
+files, not successful loading or audible rendering. Offline project creation
+remains supported, with a warning when availability cannot be checked.
+
+For Python callers, `get_plugin_availability` returns `(True | False | None,
+reason)`. The existing `check_plugin_available` helper remains a permissive
+boolean check for backward compatibility: unknown plugins are allowed for
+offline composition, not declared verified. Linux/AppImage discovery is a
+separate limitation; setting `LMMS_EXECUTABLE` alone does not establish a plugin
+inventory.
+
 ### Custom Plugins & VST
 
 | Tool | Description |
@@ -336,6 +350,9 @@ pip install -e ".[dev]"
 
 # Run tests
 pytest
+
+# Plugin verification regression tests (no LMMS installation required)
+python -m pytest tests/test_plugin_verification.py
 
 # Run in development mode
 mcp dev src/lmms_mcp/server.py

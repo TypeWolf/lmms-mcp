@@ -87,27 +87,48 @@ PLUGIN_ALIASES = {
 }
 
 
-def check_plugin_available(plugin_name: str) -> tuple[bool, str]:
-    """Check whether a plugin exists in the installed LMMS.
+def get_plugin_availability(
+    plugin_name: str,
+    *,
+    installed_plugins: set[str] | None = None,
+) -> tuple[bool | None, str]:
+    """Report plugin file presence, absence, or unknown availability.
 
-    Returns (available, reason). If no LMMS installation is detected,
-    everything is considered available (cannot verify).
+    None means the inventory cannot establish availability. Even True only
+    establishes file presence, not that LMMS can load or render the plugin.
+    An optional inventory lets callers use one consistent detection snapshot.
     """
-    name = plugin_name.lower()
-    if name in STATIC_PLUGINS:
-        return True, "built-in"
-    installed = get_installed_plugins()
-    if not installed:
-        return True, "LMMS installation not found - cannot verify"
+    name = plugin_name.strip().lower()
+    if installed_plugins is None:
+        try:
+            installed = get_installed_plugins()
+        except OSError:
+            return None, "Plugin inventory could not be read - cannot verify"
+    else:
+        installed = installed_plugins
     if name in installed:
         return True, "installed"
     if any(alias in installed for alias in PLUGIN_ALIASES.get(name, {name})):
         return True, "installed (alias)"
+    if name in STATIC_PLUGINS:
+        return None, "May be built-in on some builds - cannot verify"
+    if not installed:
+        return None, "Plugin inventory unavailable or empty - cannot verify"
     return False, (
         f"'{plugin_name}' is not included in your installed LMMS "
         f"(found {len(installed)} plugins). It may require a newer "
         f"LMMS version."
     )
+
+
+def check_plugin_available(plugin_name: str) -> tuple[bool, str]:
+    """Legacy permissive check for offline project composition.
+
+    Unknown availability remains allowed for backward compatibility. This
+    boolean is not verification; use get_plugin_availability for that purpose.
+    """
+    available, reason = get_plugin_availability(plugin_name)
+    return available is not False, reason
 
 
 def classify_installed_plugins(

@@ -329,12 +329,12 @@ def add_instrument_track(
         normalized = resolved
 
     # Check the installed LMMS actually ships this plugin
-    available, reason = lmms_app.check_plugin_available(normalized)
+    available, reason = lmms_app.get_plugin_availability(normalized)
     warning = None
-    if not available:
+    if available is not True:
         warning = reason
         alt_map = {"slicert": "audiofileprocessor", "xpressive": "watsyn"}
-        alternative = alt_map.get(normalized)
+        alternative = alt_map.get(normalized) if available is False else None
         if alternative:
             warning += f" Consider '{alternative}' instead."
 
@@ -788,8 +788,10 @@ def add_effect(
     try:
         parent = _resolve_fxchain_target(target_type, target_index)
         result = effects_mod.add_effect(parent, effect, wet, enabled, position)
-        available, reason = lmms_app.check_plugin_available(effect)
-        if not available:
+        available, reason = lmms_app.get_plugin_availability(effect)
+        if available is None:
+            result["warning"] = reason
+        elif not available:
             # Custom effect plugin? (DLL exists but not in known list)
             installed = lmms_app.get_installed_plugins()
             if effect.strip().lower() in installed:
@@ -1010,15 +1012,26 @@ def get_lmms_info() -> str:
                        "cannot be verified and rendering is disabled. "
                        "Set LMMS_EXECUTABLE env var to your lmms.exe.",
         })
-    installed = sorted(lmms_app.get_installed_plugins())
+    try:
+        installed = lmms_app.get_installed_plugins()
+        inventory_warning = None
+    except OSError:
+        installed = set()
+        inventory_warning = "Plugin inventory could not be read - cannot verify"
     # Intersect with our known instruments/effects for quick reference
+    inst_states = {
+        i: lmms_app.get_plugin_availability(i, installed_plugins=installed)[0]
+        for i in KNOWN_INSTRUMENTS
+    }
+    eff_states = {
+        e: lmms_app.get_plugin_availability(e, installed_plugins=installed)[0]
+        for e in effects_mod.KNOWN_EFFECTS
+    }
     inst_available = [
-        i for i in KNOWN_INSTRUMENTS
-        if lmms_app.check_plugin_available(i)[0]
+        i for i, state in inst_states.items() if state is True
     ]
     eff_available = [
-        e for e in effects_mod.KNOWN_EFFECTS
-        if lmms_app.check_plugin_available(e)[0]
+        e for e, state in eff_states.items() if state is True
     ]
     return json.dumps({
         "found": True,
@@ -1027,7 +1040,12 @@ def get_lmms_info() -> str:
         "plugin_count": len(installed),
         "instruments_verified_available": inst_available,
         "effects_verified_available": eff_available,
-        "all_installed_plugins": installed,
+        "all_installed_plugins": sorted(installed),
+        "plugin_inventory_status": "available" if installed else "unknown",
+        "plugin_inventory_warning": inventory_warning,
+        "instruments_unverified": [i for i, state in inst_states.items() if state is None],
+        "effects_unverified": [e for e, state in eff_states.items() if state is None],
+        "verification_scope": "Plugin file presence, not load or audio validation",
     }, indent=2)
 
 
