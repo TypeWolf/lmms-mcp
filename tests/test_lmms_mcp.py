@@ -555,7 +555,7 @@ class TestLmmsApp:
         assert ok is True
         assert "built-in" in reason
 
-    def test_check_plugin_matches_dll_reality(self):
+    def test_check_plugin_matches_inventory(self):
         """check_plugin_available must agree with the actual plugins dir."""
         from lmms_mcp import lmms_app
         if lmms_app.find_lmms_exe() is None:
@@ -644,16 +644,15 @@ class TestCustomPluginsAndVst:
         )
         assert "error" in response
 
-    def test_add_vst_track_sets_plugin_path(self):
+    def test_add_vst_track_sets_plugin_path(self, tmp_path):
         from lmms_mcp import server as srv
         from lmms_mcp.project import LMMSProject
         proj = LMMSProject()
         proj.new()
         srv.set_project(proj)
-        # Use any existing file as stand-in DLL (only path handling tested)
-        dll = Path(r"C:\Program Files\LMMS\plugins\tripleoscillator.dll")
-        if not dll.is_file():
-            pytest.skip("LMMS plugins folder not found")
+        # This is a path/XML test, not native VST loading or audio validation.
+        dll = tmp_path / "fixture_vst.dll"
+        dll.write_bytes(b"not an executable plugin; path fixture only")
         response = json.loads(srv.add_vst_track("VST Test", str(dll)))
         assert response.get("vst") == str(dll)
         track = find_tracks(proj.root)[0]
