@@ -180,6 +180,48 @@ the LMMS GUI. The installed LMMS is only used for: preset discovery,
 plugin availability checks (warns about plugins your version lacks,
 e.g. SlicerT/Xpressive require LMMS 1.3+) and audio rendering.
 
+Plugin availability has three states: detected, missing from a nonempty
+inventory, or unknown. An unavailable/empty inventory and an assumed statically
+linked plugin are not verification. `get_lmms_info` lists those plugins as
+unverified; the `*_verified_available` fields only indicate detected plugin
+files, not successful loading or audible rendering. Offline project creation
+remains supported, with a warning when availability cannot be checked.
+
+For Python callers, `get_plugin_availability` returns `(True | False | None,
+reason)`. The existing `check_plugin_available` helper remains a permissive
+boolean check for backward compatibility: unknown plugins are allowed for
+offline composition, not declared verified.
+
+### Linux and AppImage discovery
+
+`LMMS_EXECUTABLE` selects an executable/launcher and is read at call time. An
+invalid explicit path reports no installation instead of silently selecting
+another one. Without it, the server checks standard Windows locations and
+`lmms` on `PATH`.
+
+Plugin discovery accepts LMMS's own `LMMS_PLUGIN_DIR` override, portable
+`plugins/`, Unix-prefix `lib/lmms` or `lib64/lmms`, and the host ABI's
+`lib/<MULTIARCH>/lmms` layout (for example Debian's `lib/x86_64-linux-gnu/lmms`).
+The multiarch suffix comes from Python's `sysconfig`; discovery does not scan
+other ABIs or prefixes. Cross-architecture installations need an explicit
+`LMMS_PLUGIN_DIR`. Linux
+`libNAME.so` and Windows `NAME.dll` filenames map to the XML name `NAME`;
+discovery does not load native code. An invalid explicit plugin directory
+does not fall back to another inventory.
+
+A packed AppImage does not expose its plugin directory as ordinary files.
+It needs an explicit inventory directory from the same image, or an AppDir
+extracted separately in a controlled environment. The server never extracts
+or mounts AppImages automatically. For an extracted AppDir, select its
+`AppRun` launcher rather than its internal wrapper; the launcher path is
+preserved for invocation, while plugin paths are inferred from its resolved
+location. Version output must come from a successful process and contain an
+LMMS version line; an unrelated dependency error is not a version.
+
+These checks establish version and file presence, not successful plugin
+loading, audio rendering, or GUI operation. Native VST scanning still targets
+Windows DLLs; Linux LMMS plugin discovery does not add native VST support.
+
 ### Custom Plugins & VST
 
 | Tool | Description |
@@ -288,7 +330,8 @@ Typical chains:
 |----------|---------|-------------|
 | `LMMS_PROJECTS_DIR` | `~/Desktop/Media/lmms/AI-Projects` | Default directory for saving projects |
 | `LMMS_PRESETS_DIR` | auto-detected | Path to ZynAddSubFX presets folder (`data/presets/ZynAddSubFX`) |
-| `LMMS_EXECUTABLE` | auto-detected | Path to `lmms.exe` (for version/plugin checks and rendering) |
+| `LMMS_EXECUTABLE` | auto-detected | Path to the selected LMMS executable or launcher |
+| `LMMS_PLUGIN_DIR` | inferred from executable | Explicit directory of LMMS plugin libraries, also understood by LMMS itself |
 
 ## Configuration
 
@@ -337,9 +380,19 @@ pip install -e ".[dev]"
 # Run tests
 pytest
 
+# Plugin verification regression tests (no LMMS installation required)
+python -m pytest tests/test_plugin_verification.py tests/test_linux_discovery.py
+
 # Run in development mode
 mcp dev src/lmms_mcp/server.py
 ```
+
+Real application checks are opt-in. Inside a separately prepared, isolated test
+environment, set `LMMS_TEST_EXECUTABLE` to its LMMS launcher and optionally
+`LMMS_TEST_EXPECTED_VERSION` (for example `1.2.2`), then run
+`python -m pytest tests/test_real_lmms.py`. These tests fail rather than skip if
+an explicitly selected installation is invalid. With no selection they skip;
+they do not install, extract, render, or play audio.
 
 ## License
 
