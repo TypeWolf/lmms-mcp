@@ -28,6 +28,8 @@ from .xml_parser import (
     add_automation_track,
     add_pattern_track,
     add_note_to_track,
+    lmms_key_to_midi,
+    _to_int,
     add_bb_clip,
     add_mixer_channel,
     TRACK_TYPE_NAMES,
@@ -170,7 +172,7 @@ class LMMSProject:
             )
             for note_elem in pattern_elem.findall("note"):
                 pattern.notes.append(Note(
-                    key=int(note_elem.get("key", "60")),
+                    key=lmms_key_to_midi(_to_int(note_elem.get("key"), 48)),
                     pos=int(note_elem.get("pos", "0")),
                     length=int(note_elem.get("len", "48")),
                     volume=int(note_elem.get("vol", "100")),
@@ -200,7 +202,7 @@ class LMMSProject:
                 )
                 for note_elem in pattern_elem.findall("note"):
                     pattern.notes.append(Note(
-                        key=int(note_elem.get("key", "60")),
+                        key=lmms_key_to_midi(_to_int(note_elem.get("key"), 48)),
                         pos=int(note_elem.get("pos", "0")),
                         length=int(note_elem.get("len", "48")),
                         volume=int(note_elem.get("vol", "100")),

@@ -34,6 +34,30 @@ def _to_int(value, default: int = 0) -> int:
         return default
 
 
+# LMMS numbers piano keys 12 below MIDI: its key 57 is A4 (440 Hz), which is
+# also an instrument track's default base note. The public API uses standard
+# MIDI note numbers (A4 = 69), so notes are converted at the XML boundary.
+# Writing MIDI numbers unconverted makes every note play an octave high.
+LMMS_KEY_OFFSET = 12
+LMMS_MAX_KEY = 127 - LMMS_KEY_OFFSET
+
+
+def midi_to_lmms_key(midi_key: int) -> int:
+    """Convert a MIDI note number (A4 = 69) to an LMMS piano key (A4 = 57)."""
+    lmms_key = int(midi_key) - LMMS_KEY_OFFSET
+    if not 0 <= lmms_key <= LMMS_MAX_KEY:
+        raise ValueError(
+            f"MIDI key {midi_key} is outside LMMS's piano range "
+            f"(MIDI {LMMS_KEY_OFFSET}-127, C0-G9)"
+        )
+    return lmms_key
+
+
+def lmms_key_to_midi(lmms_key: int) -> int:
+    """Convert an LMMS piano key (A4 = 57) to a MIDI note number (A4 = 69)."""
+    return int(lmms_key) + LMMS_KEY_OFFSET
+
+
 def load_project(path: str | Path) -> ET.Element:
     """Load an LMMS project file (.mmpz or .mmp) and return the root element.
 
@@ -422,6 +446,7 @@ def add_note_to_track(
 ) -> dict:
     """Add a note to a pattern on an instrument or pattern (BB) track.
 
+    `key` is a MIDI note number (A4 = 69); it is stored in LMMS's numbering.
     Creates the pattern if it doesn't exist. Note `pos` is relative to
     the pattern start. If the note ends beyond the pattern clip's length,
     the clip is automatically extended - LMMS does NOT play notes outside
@@ -467,7 +492,7 @@ def add_note_to_track(
 
     note = ET.SubElement(pattern, "note", {
         "len": str(length),
-        "key": str(key),
+        "key": str(midi_to_lmms_key(key)),
         "vol": str(volume),
         "pos": str(pos),
         "pan": str(panning),
