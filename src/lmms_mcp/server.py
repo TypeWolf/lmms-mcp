@@ -566,7 +566,8 @@ def add_note(
 
     Args:
         track_index: Zero-based track index (must be an instrument or pattern track)
-        key: MIDI note number (0-127). 60=C4 (middle C), 69=A4
+        key: MIDI note number (12-127; C0 = 12 is LMMS's lowest key).
+            60=C4 (middle C), 69=A4 (440 Hz)
         pos: Position in ticks RELATIVE TO THE PATTERN START
             (192 ticks = 1 bar). Notes are placed inside the target
             pattern; if a note ends beyond the pattern clip length, the
@@ -580,15 +581,18 @@ def add_note(
             song positions first.
     """
     proj = get_project()
-    result = proj.add_note(
-        track_index=track_index,
-        key=key,
-        pos=pos,
-        length=length,
-        volume=volume,
-        panning=panning,
-        pattern_index=pattern_index,
-    )
+    try:
+        result = proj.add_note(
+            track_index=track_index,
+            key=key,
+            pos=pos,
+            length=length,
+            volume=volume,
+            panning=panning,
+            pattern_index=pattern_index,
+        )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
     return json.dumps(result)
 
 
@@ -615,13 +619,16 @@ def add_note_by_name(
         return json.dumps({"error": str(e)})
 
     proj = get_project()
-    result = proj.add_note(
-        track_index=track_index,
-        key=key,
-        pos=pos,
-        length=length,
-        volume=volume,
-    )
+    try:
+        result = proj.add_note(
+            track_index=track_index,
+            key=key,
+            pos=pos,
+            length=length,
+            volume=volume,
+        )
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
     return json.dumps(result)
 
 
@@ -649,15 +656,19 @@ def add_notes_batch(
                 added.append({"error": str(e), "note": note_data})
                 continue
 
-        result = proj.add_note(
-            track_index=track_index,
-            key=key,
-            pos=note_data.get("pos", 0),
-            length=note_data.get("length", 48),
-            volume=note_data.get("volume", 100),
-            panning=note_data.get("panning", 0),
-            pattern_index=note_data.get("pattern_index"),
-        )
+        try:
+            result = proj.add_note(
+                track_index=track_index,
+                key=key,
+                pos=note_data.get("pos", 0),
+                length=note_data.get("length", 48),
+                volume=note_data.get("volume", 100),
+                panning=note_data.get("panning", 0),
+                pattern_index=note_data.get("pattern_index"),
+            )
+        except ValueError as e:
+            added.append({"error": str(e), "note": note_data})
+            continue
         added.append(result)
 
     return json.dumps({"added": len(added), "notes": added})

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from lmms_mcp.models import Note, midi_to_note_name, note_name_to_midi, bars_to_ticks, ticks_to_bars
-from lmms_mcp.xml_parser import create_empty_project, load_project, save_project, find_tracks, add_instrument_track, add_note_to_track, add_pattern_track, add_sample_track
+from lmms_mcp.xml_parser import create_empty_project, load_project, save_project, find_tracks, add_instrument_track, add_note_to_track, add_pattern_track, add_sample_track, midi_to_lmms_key, lmms_key_to_midi
 from lmms_mcp.project import LMMSProject
 
 
@@ -96,7 +96,51 @@ class TestXMLParser:
         assert pattern is not None
         notes = pattern.findall("note")
         assert len(notes) == 1
-        assert notes[0].get("key") == "60"
+        # MIDI 60 (middle C) is LMMS key 48: LMMS numbers keys 12 below MIDI.
+        assert notes[0].get("key") == "48"
+
+
+class TestLmmsKeyNumbering:
+    """LMMS stores piano keys 12 below MIDI (its key 57 is A4 = 440 Hz, the
+    default base note). The API takes and returns standard MIDI numbers."""
+
+    def test_a4_is_written_as_lmms_key_57(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        add_note_to_track(root, 0, key=69, pos=0, length=48)
+        note = find_tracks(root)[0].find("pattern").find("note")
+        assert note.get("key") == "57"
+
+    def test_a4_matches_the_track_base_note(self):
+        root = create_empty_project()
+        add_instrument_track(root, "Lead")
+        add_note_to_track(root, 0, key=note_name_to_midi("A4"), pos=0, length=48)
+        track = find_tracks(root)[0]
+        base = track.find("instrumenttrack").get("basenote")
+        assert track.find("pattern").find("note").get("key") == base
+
+    def test_conversion_helpers_roundtrip(self):
+        for midi in [12, 21, 48, 60, 69, 108, 127]:
+            assert lmms_key_to_midi(midi_to_lmms_key(midi)) == midi
+        assert midi_to_lmms_key(69) == 57
+        assert lmms_key_to_midi(57) == 69
+
+    def test_keys_below_lmms_range_are_rejected(self):
+        with pytest.raises(ValueError):
+            midi_to_lmms_key(11)
+
+    def test_notes_read_back_as_midi(self):
+        proj = LMMSProject()
+        proj.new()
+        proj.add_track("instrument", "Lead")
+        proj.add_note(0, key=69, pos=0, length=48)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "keys.mmp"
+            proj.save(path)
+            loaded = LMMSProject()
+            loaded.load(path)
+            notes = loaded.get_info().tracks[0].patterns[0].notes
+            assert [n.key for n in notes] == [69]
 
 
 class TestProject:
